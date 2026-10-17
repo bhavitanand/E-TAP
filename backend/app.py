@@ -18,14 +18,15 @@ except ImportError:
 import logging
 import asyncio
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, Request
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from email_parser.unified_parser import UnsupportedFileTypeError
-from pipeline import analyze_email_upload
+from pipeline import analyze_email_upload, VALID_SOURCES
+from verdicts import finalize_verdict
 
 logger = logging.getLogger("E-TAP.api")
 
@@ -88,8 +89,19 @@ def health() -> dict:
 
 @app.post("/analyze", response_model=None)
 @limiter.limit("10/minute")
-async def analyze(request: Request, file: UploadFile = File(...)) -> dict:
+async def analyze(
+    request: Request,
+    file: UploadFile = File(...),
+    source: str | None = Form(None),
+) -> dict:
+    """
+    `source` is optional. Send "quick_content_check" when the .eml was rebuilt
+    from visible mail-client text (e.g. the Gmail extension) so the backend
+    does not pretend to have original headers. Omitted/unknown = full message.
+    """
     filename = file.filename or "uploaded_email.eml"
+    if source is not None and source not in VALID_SOURCES:
+        raise HTTPException(status_code=400, detail="Unsupported analysis source.")
     try:
         # Enforce streaming read with hard maximum size limit (25MB)
         raw_bytes = bytearray()
@@ -110,7 +122,7 @@ async def analyze(request: Request, file: UploadFile = File(...)) -> dict:
 
         # Run heavy synchronous pipeline (WHOIS, VirusTotal, Gemini, DB) in worker thread
         # to ensure the main asyncio event loop never freezes during /health checks
-        return await asyncio.to_thread(analyze_email_upload, filename, bytes(raw_bytes))
+        return await asyncio.to_thread(analyze_email_upload, filename, bytes(raw_bytes), source)
 
     except UnsupportedFileTypeError as exc:
         # Clean 400 with descriptive client error
@@ -187,11 +199,20 @@ async def get_investigation(request: Request, email_id: str) -> dict:
         #   triage, graph_diffusion
         
         fa = doc.get("final_assessment") or {}
-        
+
+        # Same verdict/band logic as live analyses, so records saved before
+        # verdict normalization existed render consistently.
+        decision = finalize_verdict(
+            doc.get("verdict") or fa.get("verdict"),
+            doc.get("risk_score") if doc.get("risk_score") is not None else fa.get("risk_score", 0),
+        )
+
         mapped_doc = {
             "email_id": str(doc["_id"]),
-            "risk_score": doc.get("risk_score") or fa.get("risk_score", 0),
-            "verdict": doc.get("verdict") or fa.get("verdict", "UNKNOWN"),
+            "risk_score": decision["risk_score"],
+            "verdict": decision["verdict"],
+            "verdict_band": decision["verdict_band"],
+            "analysis_provenance": doc.get("analysis_provenance"),
             "email": {
                 "subject": doc.get("subject", "(No Subject Header)"),
                 "from_raw": doc.get("from_email", ""),
@@ -216,11 +237,9 @@ async def get_investigation(request: Request, email_id: str) -> dict:
             },
             "mitre_attack": doc.get("mitre_attack") or [],
             "triage": doc.get("triage") or {},
-            "stage_status": doc.get("stage_status") or {
-                "A": "complete", "B": "complete", "B2": "complete",
-                "D": "complete", "E": "live", "F": "complete",
-                "G": "gemini", "H": "complete",
-            },
+            # Older records predate stored stage_status; report "unknown" rather
+            # than inventing "live"/"gemini" for stages we cannot vouch for.
+            "stage_status": doc.get("stage_status") or {"E": "unknown", "G": "unknown"},
         }
         return mapped_doc
     except HTTPException:

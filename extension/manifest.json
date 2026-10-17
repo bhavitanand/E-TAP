@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "E-TAP \u2014 Email Threat Analysis",
-  "version": "1.1.0",
-  "description": "Experimental Gmail overlay for E-TAP email threat analysis.",
+  "name": "E-TAP — Email Threat Analysis",
+  "version": "1.2.0",
+  "description": "Experimental Gmail overlay: on-demand Quick Content Check of the visible email text. Nothing is sent until you click Analyze.",
   "permissions": [
     "activeTab",
     "scripting"
@@ -31,6 +31,6 @@
     }
   ],
   "action": {
-    "default_title": "E-TAP is active"
+    "default_title": "E-TAP Quick Content Check"
   }
 }

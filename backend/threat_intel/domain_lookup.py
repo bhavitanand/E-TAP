@@ -70,7 +70,9 @@ def get_domain_info(domain: str, timeout_seconds: float = 3.0) -> dict:
     except Exception as e:
         # Common causes: domain doesn't exist, WHOIS server rate-limited us,
         # privacy-protected registration with no useful data, or socket timeout
-        result = {"age_days": -1, "error": f"WHOIS lookup failed or timed out: {e}"}
+        # Not cached: a rate-limited or timed-out WHOIS server should be retried
+        # on the next email, not remembered as "failed" for 24 hours.
+        return {"age_days": -1, "error": f"WHOIS lookup failed or timed out: {e}"}
     finally:
         socket.setdefaulttimeout(prev_timeout)
 

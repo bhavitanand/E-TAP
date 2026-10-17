@@ -25,7 +25,7 @@ Current URLs (update when changed):
 
 ## Known limitations / risks
 
-1. **Gmail extension is experimental.** It automatically inspects visible Gmail DOM elements, then reconstructs a simplified email message. It does not reliably preserve the original raw message, original authentication headers or attachments. The extension source currently targets localhost by default and must be pointed to the hosted URLs separately if required.
+1. **Gmail extension is experimental.** It reconstructs a simplified email message from visible Gmail DOM text only when the user clicks Analyze (Quick Content Check). It does not reliably preserve the original raw message, original authentication headers or attachments. The extension source currently targets localhost by default and must be pointed to the hosted URLs separately if required.
 2. **Browser history is local.** The History page stores its list in browser `localStorage` (up to 50 entries). The backend persists individual analysis records in MongoDB, and exposes `GET /investigations/{email_id}`, but does not currently expose a general server-side history-list API.
 3. **External data sharing.** Live reputation services can receive IOCs; Gemini prompts may include email-derived text and forensic evidence. Do not claim full local-only processing while using cloud APIs.
 4. **RAG embedding quality.** On Render, the embedding code uses a deterministic hash-based fallback to reduce memory requirements. This is not the same as a trained semantic embedding model. Atlas Vector Search remains opt-in and requires a configured matching index.

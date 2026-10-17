@@ -58,6 +58,13 @@ class HeaderAnalysis:
     domain_analysis: Dict = field(default_factory=dict)    # punycode/homograph/lookalike/display-name-mismatch results
     reply_to_mismatch: bool = False
 
+    # --- evidence availability ---
+    # False when the original transport headers were never available (e.g. a
+    # message rebuilt from visible Gmail text). Routing and SPF/DKIM/DMARC are
+    # then reported as "not_available" instead of being guessed.
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
     red_flags: List[str] = field(default_factory=list)
     risk_indicator_count: int = 0
 
@@ -65,11 +72,21 @@ class HeaderAnalysis:
         return asdict(self)
 
 
-def analyze_headers(parsed_email) -> dict:
+NOT_AVAILABLE = "not_available"
+
+
+def analyze_headers(parsed_email, headers_available: bool = True) -> dict:
     """
     parsed_email: a ParsedEmail object from Stage A (email_parser).
     Returns a plain dict (JSON-serializable) — the Stage B output that
     the team API layer and the frontend will consume.
+
+    headers_available=False means the caller only had a reconstruction of the
+    message (no Received / Authentication-Results / DKIM-Signature headers).
+    Routing and authentication checks are skipped -- running them, including
+    the live-DNS fallback, against headers that do not exist would produce
+    misleading SPF/DKIM/DMARC results. Sender-identity checks that only need
+    the From address (lookalike domains, Reply-To mismatch) still run.
     """
     data = parsed_email.to_dict() if hasattr(parsed_email, "to_dict") else parsed_email
     all_headers = data.get("all_headers", {})
@@ -83,26 +100,36 @@ def analyze_headers(parsed_email) -> dict:
     from_domain = _extract_domain(result.sender_email)
     reply_to_domain = _extract_domain(result.reply_to)
 
-    # --- Received chain / originating IP ---
-    result.originating_ip = find_originating_ip(all_headers)
-    result.received_chain = get_received_chain_summary(all_headers)
+    if headers_available:
+        # --- Received chain / originating IP ---
+        result.originating_ip = find_originating_ip(all_headers)
+        result.received_chain = get_received_chain_summary(all_headers)
 
-    if not all_headers.get("Received"):
-        result.red_flags.append("no_received_headers")  # itself suspicious — legitimate mail always has at least one hop
+        if not all_headers.get("Received"):
+            result.red_flags.append("no_received_headers")  # itself suspicious — legitimate mail always has at least one hop
 
-    # --- SPF / DKIM / DMARC ---
-    auth = evaluate_authentication(all_headers, from_domain, result.originating_ip)
-    result.spf = auth["spf"]["verdict"]
-    result.dkim = auth["dkim"]["verdict"]
-    result.dmarc = auth["dmarc"]["verdict"]
-    result.auth_details = auth
+        # --- SPF / DKIM / DMARC ---
+        auth = evaluate_authentication(all_headers, from_domain, result.originating_ip)
+        result.spf = auth["spf"]["verdict"]
+        result.dkim = auth["dkim"]["verdict"]
+        result.dmarc = auth["dmarc"]["verdict"]
+        result.auth_details = auth
 
-    if result.spf in ("fail", "softfail"):
-        result.red_flags.append(f"spf_{result.spf}")
-    if result.dkim in ("fail", "key_not_found", "misaligned"):
-        result.red_flags.append(f"dkim_{result.dkim}")
-    if result.dmarc == "fail":
-        result.red_flags.append("dmarc_fail")
+        if result.spf in ("fail", "softfail"):
+            result.red_flags.append(f"spf_{result.spf}")
+        if result.dkim in ("fail", "key_not_found", "misaligned"):
+            result.red_flags.append(f"dkim_{result.dkim}")
+        if result.dmarc == "fail":
+            result.red_flags.append("dmarc_fail")
+    else:
+        reason = (
+            "Original message headers were not available (content reconstructed "
+            "from the visible email), so routing and SPF/DKIM/DMARC were not evaluated."
+        )
+        result.available = False
+        result.unavailable_reason = reason
+        result.spf = result.dkim = result.dmarc = NOT_AVAILABLE
+        result.auth_details = {"available": False, "reason": reason}
 
     # --- Reply-To mismatch ---
     if reply_to_domain and from_domain and reply_to_domain != from_domain:

@@ -265,3 +265,30 @@
   }
   .verdict-headline.danger { color: #CC0000 !important; }
 }
+
+/* Verdict provenance chips: what the verdict was (and was not) based on */
+.verdict-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.verdict-provenance-chip {
+  padding: 2px 9px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.6;
+}
+
+/* Shown in place of auth results when original headers were unavailable */
+.headers-unavailable-note {
+  margin: 0 0 14px 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--verdict-caution);
+  background: rgba(232, 162, 61, 0.1);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}

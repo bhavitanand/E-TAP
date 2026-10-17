@@ -95,7 +95,13 @@ def check_ip_reputation(ip: str) -> dict:
             "is_tor": data.get("isTor"),
         }
     except requests.RequestException as e:
-        result = {"error": f"AbuseIPDB request failed: {e}"}
+        # Failures are NOT cached: a transient error must not be replayed
+        # as the answer for the next hour. malicious=None means "unknown".
+        return {
+            "malicious": None,
+            "status": "error",
+            "error": f"AbuseIPDB request failed: {type(e).__name__}",
+        }
 
     _ip_cache.set(cache_key, result)
     return result
@@ -160,6 +166,7 @@ def get_ip_geolocation(ips: list[str]) -> dict[str, dict]:
                     "proxy": entry.get("proxy"),
                 }
             results[ip] = geo
-            _ip_cache.set(f"geo:{ip}", geo)
+            if "error" not in geo:  # only cache successes
+                _ip_cache.set(f"geo:{ip}", geo)
 
     return results

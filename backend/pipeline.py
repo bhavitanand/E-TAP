@@ -7,7 +7,9 @@ the HTTP API. It keeps one canonical A -> B/B2 -> D -> E -> F -> G flow.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -19,10 +21,46 @@ from threat_intel import enrich_iocs
 from correlation import correlate_and_store
 from db import connection, repository
 from ai_engine.stage_g import analyze_with_stage_g
+from verdicts import finalize_verdict, LIKELY_LEGITIMATE
+
+logger = logging.getLogger("E-TAP.pipeline")
+
+# How the message reached us. "quick_content_check" = rebuilt from the text
+# visible in a mail client (no original headers/attachments/HTML links).
+SOURCE_FULL_MESSAGE = "full_message"
+SOURCE_QUICK_CHECK = "quick_content_check"
+VALID_SOURCES = frozenset({SOURCE_FULL_MESSAGE, SOURCE_QUICK_CHECK})
 
 
 def _env_truthy(name: str, default: str = "0") -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_SECRET_PATTERNS = (
+    re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
+    re.compile(r"(?i)(api[_-]?key|key|token|secret)=[^&\s]+"),
+)
+
+
+def _short_reason(exc_text: Any, limit: int = 160) -> str | None:
+    """Single-line, secret-scrubbed, length-limited version of an error message."""
+    if not exc_text:
+        return None
+    text = " ".join(str(exc_text).split())
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _count_unavailable_lookups(threat_intel: dict) -> tuple[int, int]:
+    """(lookups attempted, lookups that returned no usable answer) for live TI."""
+    total = failed = 0
+    for section in ("ip_reputation", "domain_info", "url_reputation", "hash_reputation"):
+        for info in (threat_intel.get(section) or {}).values():
+            total += 1
+            if isinstance(info, dict) and info.get("error"):
+                failed += 1
+    return total, failed
 
 
 def _json_safe(value: Any) -> Any:
@@ -61,11 +99,13 @@ def _build_email_summary(data: dict) -> dict:
     }
 
 
-def _run_parsed_pipeline(parsed_email) -> dict:
+def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
     db = connection.get_db()
     data = parsed_email.to_dict()
+    source = source if source in VALID_SOURCES else SOURCE_FULL_MESSAGE
+    quick_check = source == SOURCE_QUICK_CHECK
 
-    header_analysis = analyze_headers(parsed_email)
+    header_analysis = analyze_headers(parsed_email, headers_available=not quick_check)
     attachment_analysis = analyze_attachments(data.get("attachments") or [])
     ioc_analysis = extract_iocs(
         all_headers=data.get("all_headers"),
@@ -164,17 +204,23 @@ def _run_parsed_pipeline(parsed_email) -> dict:
     # We add a heuristic override to FORCE Gemini if risky keywords or links exist.
     force_gemini = False
     body_text = email_summary.get("body_text", "")
-    print(f"\n[DEBUG Heuristic] Extracted Body Length: {len(body_text) if body_text else 0}")
+    # Never log message content, URLs or matched keywords: stdout goes to the
+    # hosting platform's log store. Counts only.
     if body_text:
         body_lower = body_text.lower()
         risky_keywords = ["urgent", "won", "$", "prize", "password", "gift card", "tinyurl.com", "bit.ly", "login"]
-        matched_words = [k for k in risky_keywords if k in body_lower]
-        print(f"[DEBUG Heuristic] Matched risky words: {matched_words}")
-        if matched_words:
+        matched_count = sum(1 for k in risky_keywords if k in body_lower)
+        logger.debug("heuristic: body_len=%d risky_keyword_hits=%d", len(body_text), matched_count)
+        if matched_count:
             force_gemini = True
-            
+
     if ioc_analysis.get("urls"):
-        print(f"[DEBUG Heuristic] URLs found: {ioc_analysis.get('urls')}")
+        logger.debug("heuristic: %d url(s) found, forcing Gemini review", len(ioc_analysis["urls"]))
+        force_gemini = True
+
+    # A quick content check has no real headers, so the metadata-only XGBoost
+    # pre-filter has nothing trustworthy to judge. Always do the content review.
+    if quick_check:
         force_gemini = True
 
     # If any attachment is flagged suspicious (macros, type mismatch,
@@ -183,7 +229,7 @@ def _run_parsed_pipeline(parsed_email) -> dict:
     # attachment content risk.
     for att in (attachment_analysis.get("attachments") or []):
         if att.get("suspicious"):
-            print(f"[DEBUG Heuristic] Suspicious attachment detected: {att.get('filename')}")
+            logger.debug("heuristic: suspicious attachment present, forcing Gemini review")
             force_gemini = True
             break
 
@@ -195,18 +241,23 @@ def _run_parsed_pipeline(parsed_email) -> dict:
     ):
         gemini_skipped = True
         triage_risk = max(0, min(10, round((1.0 - triage_result["confidence"]) * 20)))
+        triage_evidence = [
+            "Passed Stage C' metadata triage with high confidence",
+            "Authentication & infrastructure indicators consistent with benign traffic",
+        ]
+        if not threat_intel_live:
+            triage_evidence.append(
+                "External reputation lookups (VirusTotal, AbuseIPDB, WHOIS) were NOT performed: threat intelligence is offline"
+            )
         final_assessment = {
-            "verdict": "Likely Legitimate",
+            "verdict": LIKELY_LEGITIMATE,
             "risk_score": triage_risk,
             "confidence": triage_result["confidence"],
             "explanation": (
                 f"Passed fast metadata triage pre-filter (XGBoost) with {round(triage_result['confidence'] * 100)}% "
                 f"benign confidence. Deep generative AI interpretation bypassed to conserve latency and quota."
             ),
-            "supporting_evidence": [
-                "Passed Stage C' metadata triage with high confidence",
-                "Authentication & infrastructure indicators consistent with benign traffic",
-            ],
+            "supporting_evidence": triage_evidence,
             "evidence_assessments": [],
             "mitre_attack": [],
             "recommended_actions": ["No action required. Deliver normally."],
@@ -214,7 +265,7 @@ def _run_parsed_pipeline(parsed_email) -> dict:
         }
         ai_analysis = {
             "content_classification": {
-                "verdict": "Likely Legitimate",
+                "verdict": LIKELY_LEGITIMATE,
                 "categories": [],
                 "provider": "xgboost_triage",
                 "content_risk_score": triage_risk,
@@ -227,10 +278,56 @@ def _run_parsed_pipeline(parsed_email) -> dict:
         ai_analysis = analyze_with_stage_g(context)
         final_assessment = ai_analysis.get("final_assessment") or {}
 
+    # One place decides the label, the score band and what clients should show.
+    decision = finalize_verdict(final_assessment.get("verdict"), final_assessment.get("risk_score"))
+    final_assessment["verdict"] = decision["verdict"]
+    final_assessment["risk_score"] = decision["risk_score"]
+    final_assessment["verdict_band"] = decision["verdict_band"]
+
+    ti_total, ti_failed = _count_unavailable_lookups(threat_intel_analysis) if threat_intel_live else (0, 0)
+    provider = final_assessment.get("provider") or "unknown"
+    fallback_reason = _short_reason(final_assessment.get("fallback_reason"))
+    if provider == "offline_fallback" and not fallback_reason:
+        # e.g. GEMINI_API_KEY not configured -- say why instead of a bare "fallback"
+        fallback_reason = _short_reason(final_assessment.get("status"))
+    analysis_provenance = {
+        "input_mode": source,
+        "headers_available": not quick_check,
+        "threat_intel_mode": "live" if threat_intel_live else "offline_placeholder",
+        "threat_intel_lookups": ti_total,
+        "threat_intel_unavailable": ti_failed,
+        "assessment_provider": provider,
+        "assessment_model": final_assessment.get("model"),
+        "fallback_used": provider == "offline_fallback" or bool(fallback_reason),
+        "fallback_reason": fallback_reason,
+        "gemini_skipped_by_triage": gemini_skipped,
+        "verdict_reconciled": decision["reconciled"],
+        "verdict_original": decision["original_label"],
+    }
+    # Never ship the raw exception text to clients; the scrubbed copy lives in provenance.
+    final_assessment.pop("fallback_reason", None)
+    (ai_analysis.get("content_classification") or {}).pop("fallback_reason", None)
+
+    stage_status = {
+        "A": "complete",
+        "B": "complete" if not quick_check else "headers_unavailable",
+        "B2": "complete",
+        "D": "complete",
+        "E": "live" if threat_intel_live else "offline_placeholder",
+        "F": "complete",
+        "F_prime": "complete" if graph_diffusion_result.get("available") else "insufficient_data",
+        "C_prime": "bypassed_gemini" if gemini_skipped else ("evaluated" if triage_result.get("available") else "offline"),
+        "G": "skipped_by_triage" if gemini_skipped else provider,
+        "H": "complete",
+    }
+
     repository.update_analysis_fields(
         db,
         correlation_result["email_id"],
         {
+            "analysis_provenance": analysis_provenance,
+            "stage_status": stage_status,
+            "verdict_band": decision["verdict_band"],
             "content_analysis": ai_analysis.get("content_classification"),
             "final_assessment": final_assessment,
             "mitre_attack": ai_analysis.get("mitre_attack", []),
@@ -250,6 +347,8 @@ def _run_parsed_pipeline(parsed_email) -> dict:
         "email_id": correlation_result["email_id"],
         "risk_score": final_assessment.get("risk_score"),
         "verdict": final_assessment.get("verdict"),
+        "verdict_band": decision["verdict_band"],
+        "analysis_provenance": analysis_provenance,
         "email": context["email"],
         "headers": header_analysis,
         "attachments": attachment_analysis.get("attachments", []),
@@ -267,18 +366,7 @@ def _run_parsed_pipeline(parsed_email) -> dict:
             "gemini_skipped": gemini_skipped,
             "available": triage_result.get("available", False),
         },
-        "stage_status": {
-            "A": "complete",
-            "B": "complete",
-            "B2": "complete",
-            "D": "complete",
-            "E": "live" if threat_intel_live else "offline_placeholder",
-            "F": "complete",
-            "F_prime": "complete" if graph_diffusion_result.get("available") else "insufficient_data",
-            "C_prime": "bypassed_gemini" if gemini_skipped else ("evaluated" if triage_result.get("available") else "offline"),
-            "G": "skipped_by_triage" if gemini_skipped else final_assessment.get("provider", "unknown"),
-            "H": "complete",
-        },
+        "stage_status": stage_status,
     }
 
     # Fire-and-forget background persistence of RAG summary and vector embedding
@@ -311,13 +399,13 @@ def _run_parsed_pipeline(parsed_email) -> dict:
     return _json_safe(result)
 
 
-def analyze_email_file(path: str) -> dict:
+def analyze_email_file(path: str, source: str | None = None) -> dict:
     """Analyze one .eml/.msg file from disk."""
     parsed = parse_email(path)
-    return _run_parsed_pipeline(parsed)
+    return _run_parsed_pipeline(parsed, source=source)
 
 
-def analyze_email_upload(filename: str, raw_bytes: bytes) -> dict:
+def analyze_email_upload(filename: str, raw_bytes: bytes, source: str | None = None) -> dict:
     """Analyze one uploaded .eml/.msg file from raw bytes."""
     parsed = parse_email_from_upload(filename, raw_bytes)
-    return _run_parsed_pipeline(parsed)
+    return _run_parsed_pipeline(parsed, source=source)

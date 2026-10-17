@@ -116,7 +116,7 @@ Live lookups may send IOCs or derived indicators to third-party services. Gemini
 
 ## Gmail extension (experimental)
 
-The extension is an early prototype, **not an official Gmail integration**. It watches visible Gmail DOM content, reconstructs a simplified plain-text `.eml` from the sender, subject and visible body, and submits that reconstructed artifact to the configured API. It does not access the original raw Gmail message, reliably retain full original headers, or process original attachments as the user received them. It scans visible messages automatically, so use only a dedicated test mailbox with non-sensitive messages.
+The extension is an early prototype, **not an official Gmail integration**. It adds an **Analyze this email** button above an opened message; nothing is read from the message or sent anywhere until you click it. On click it reconstructs a simplified plain-text `.eml` from the sender, subject and visible body and submits that to the configured API as a **Quick Content Check**. It does not access the original raw Gmail message: original headers (SPF/DKIM/DMARC, routing), link targets and attachments are reported as *not available*. For full forensics, upload the original `.eml`/`.msg` in the dashboard. The result banner shows whether threat intelligence was live or offline and whether Gemini or the offline fallback produced the assessment. Use only a dedicated test mailbox with non-sensitive messages.
 
 To load it locally in Chrome or Brave:
 

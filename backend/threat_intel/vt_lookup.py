@@ -5,6 +5,11 @@ VirusTotal's free tier is the tightest constraint in Stage E:
 4 requests/min, 500/day. This module leans hard on TTLCache to avoid
 burning quota on repeat lookups, and treats HTTP 429 (rate limited) as
 a normal, expected outcome to report gracefully -- not a crash.
+
+Caching rule: only DEFINITIVE answers are cached (a verdict from VirusTotal,
+or "VirusTotal has never seen this"). Errors, timeouts, rate limits and
+missing keys are never cached -- otherwise one transient failure would be
+served back as "the answer" for the next hour.
 """
 
 from __future__ import annotations
@@ -58,100 +63,75 @@ def _url_to_vt_id(url: str) -> str:
     return base64.urlsafe_b64encode(url.encode()).decode().strip("=")
 
 
-def check_url_reputation(url: str) -> dict:
-    cache_key = f"vt_url:{url}"
+def _unavailable(reason: str, status: str = "error") -> dict:
+    """
+    A lookup that did not produce an answer. `malicious` is None (unknown),
+    never False, so callers cannot mistake "could not check" for "clean".
+    These results are deliberately NOT cached.
+    """
+    return {"malicious": None, "status": status, "error": reason}
+
+
+def _vt_lookup(cache_key: str, path: str) -> dict:
     cached = _vt_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    api_key = _get_vt_key()
-    if not api_key:
-        return {"error": "VIRUSTOTAL_API_KEY not set"}
+    if not _get_vt_key():
+        return _unavailable("VIRUSTOTAL_API_KEY not set", status="not_configured")
 
     # Internal throttle: protect the 4 req/min free-tier quota
     if not _vt_limiter.can_request():
-        return {
-            "status": "rate_limited_internal",
-            "error": "VirusTotal free-tier quota (4 req/min) active — remote query throttled to prevent API lockout",
-            "malicious": None,
-        }
-
-    url_id = _url_to_vt_id(url)
+        return _unavailable(
+            "VirusTotal free-tier quota (4 req/min) active — remote query throttled to prevent API lockout",
+            status="rate_limited_internal",
+        )
 
     try:
         _vt_limiter.record_request()
         response = requests.get(
-            f"{VT_BASE_URL}/urls/{url_id}",
+            f"{VT_BASE_URL}/{path}",
             headers=_vt_headers(),
             timeout=10,
         )
 
         if response.status_code == 429:
-            result = {"error": "VirusTotal rate limit hit (4/min, 500/day on free tier)"}
-        elif response.status_code == 404:
-            # URL not previously seen by VT -- not necessarily benign, just unknown.
-            # Submitting it for a fresh scan costs another quota unit, so we
-            # report "unknown" rather than auto-submitting.
-            result = {"malicious": None, "status": "not previously scanned by VirusTotal"}
-        else:
-            response.raise_for_status()
-            stats = response.json()["data"]["attributes"]["last_analysis_stats"]
-            malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
-            result = {
-                "malicious": malicious_count > 0,
-                "malicious_engine_count": malicious_count,
-                "total_engines": sum(stats.values()),
-                "stats": stats,
-            }
-    except requests.RequestException as e:
-        result = {"error": f"VirusTotal request failed: {e}"}
+            return _unavailable(
+                "VirusTotal rate limit hit (4/min, 500/day on free tier)",
+                status="rate_limited",
+            )
 
+        if response.status_code == 404:
+            # Not previously seen by VT -- not necessarily benign, just unknown.
+            # Submitting it for a fresh scan costs another quota unit, so we
+            # report "unknown" rather than auto-submitting. This IS a
+            # definitive answer, so it is cached.
+            result = {"malicious": None, "status": "not previously scanned by VirusTotal"}
+            _vt_cache.set(cache_key, result)
+            return result
+
+        response.raise_for_status()
+        stats = response.json()["data"]["attributes"]["last_analysis_stats"]
+    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
+        # Do not echo the exception text: requests errors embed the full
+        # request URL, which for url lookups contains the base64 of the
+        # (possibly sensitive) link being checked.
+        return _unavailable(f"VirusTotal request failed ({type(exc).__name__})")
+
+    malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
+    result = {
+        "malicious": malicious_count > 0,
+        "malicious_engine_count": malicious_count,
+        "total_engines": sum(stats.values()),
+        "stats": stats,
+    }
     _vt_cache.set(cache_key, result)
     return result
+
+
+def check_url_reputation(url: str) -> dict:
+    return _vt_lookup(f"vt_url:{url}", f"urls/{_url_to_vt_id(url)}")
 
 
 def check_hash_reputation(file_hash: str) -> dict:
-    cache_key = f"vt_hash:{file_hash}"
-    cached = _vt_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    api_key = _get_vt_key()
-    if not api_key:
-        return {"error": "VIRUSTOTAL_API_KEY not set"}
-
-    # Internal throttle: protect the 4 req/min free-tier quota
-    if not _vt_limiter.can_request():
-        return {
-            "status": "rate_limited_internal",
-            "error": "VirusTotal free-tier quota (4 req/min) active — remote query throttled to prevent API lockout",
-            "malicious": None,
-        }
-
-    try:
-        _vt_limiter.record_request()
-        response = requests.get(
-            f"{VT_BASE_URL}/files/{file_hash}",
-            headers=_vt_headers(),
-            timeout=10,
-        )
-
-        if response.status_code == 429:
-            result = {"error": "VirusTotal rate limit hit (4/min, 500/day on free tier)"}
-        elif response.status_code == 404:
-            result = {"malicious": None, "status": "not previously scanned by VirusTotal"}
-        else:
-            response.raise_for_status()
-            stats = response.json()["data"]["attributes"]["last_analysis_stats"]
-            malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
-            result = {
-                "malicious": malicious_count > 0,
-                "malicious_engine_count": malicious_count,
-                "total_engines": sum(stats.values()),
-                "stats": stats,
-            }
-    except requests.RequestException as e:
-        result = {"error": f"VirusTotal request failed: {e}"}
-
-    _vt_cache.set(cache_key, result)
-    return result
+    return _vt_lookup(f"vt_hash:{file_hash}", f"files/{file_hash}")

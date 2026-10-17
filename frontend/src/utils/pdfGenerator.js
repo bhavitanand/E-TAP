@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { bandFor, displayLabel } from './verdict';
 
 /**
  * pdfGenerator.js
@@ -57,13 +58,8 @@ function statusColor(status) {
   return COLORS.neutral;
 }
 
-function verdictStatusClass(verdict = '', riskScore = 0) {
-  const v = String(verdict || '');
-  if (riskScore >= 70 || v.includes('HIGH') || v.includes('PHISH') || v.includes('MALICIOUS')) {
-    return 'danger';
-  }
-  if (riskScore >= 40 || v.includes('SUSPICIOUS')) return 'caution';
-  return 'safe';
+function verdictStatusClass(verdict = '', riskScore = 0, verdictBand = null) {
+  return bandFor({ verdictBand, verdict, riskScore });
 }
 
 /** Ensure there is enough vertical room left on the page; otherwise start a new page. */
@@ -235,6 +231,7 @@ export function generatePdfDocument(data, options = {}) {
     email_id,
     risk_score = 0,
     verdict = 'UNKNOWN',
+    verdict_band = null,
     email = {},
     headers = {},
     attachments = [],
@@ -276,14 +273,14 @@ export function generatePdfDocument(data, options = {}) {
   y = 110;
 
   // ---------- Verdict banner ----------
-  const vClass = verdictStatusClass(verdict, risk_score);
+  const vClass = verdictStatusClass(verdict, risk_score, verdict_band);
   const vColor = statusColor(vClass);
   doc.setFillColor(vColor[0], vColor[1], vColor[2]);
   doc.roundedRect(PAGE_MARGIN, y, 515, 56, 3, 3, 'F');
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
-  doc.text(safe(verdict), PAGE_MARGIN + 16, y + 26);
+  doc.text(safe(displayLabel(verdict, risk_score)), PAGE_MARGIN + 16, y + 26);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.text(

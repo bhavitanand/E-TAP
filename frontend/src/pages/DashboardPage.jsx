@@ -247,6 +247,9 @@ export function DashboardPage() {
             confidence={finalAssessment.confidence}
             explanation={finalAssessment.explanation}
             triage={data.triage}
+            band={data.verdict_band}
+            provenance={data.analysis_provenance}
+            stageStatus={data.stage_status}
           />
 
           {/* Core Envelope Header Metadata Card */}
