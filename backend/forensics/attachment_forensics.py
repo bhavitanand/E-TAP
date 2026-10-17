@@ -116,6 +116,13 @@ def analyze_attachment(raw_attachment: dict) -> dict:
             # not a narrowing of what counts as suspicious.
             result["flags"].append("Office document contains a macro")
             result["flags"].extend(macro_result["flags"])
+        elif macro_result.get("parse_failed"):
+            # Password-protected or corrupt Office doc -- cannot inspect
+            # macros, which is itself suspicious. Treat as a red flag.
+            result["suspicious"] = True
+            result["flags"].append(
+                "Office document could not be parsed (possibly password-protected or corrupt) -- macro inspection failed"
+            )
 
     # Image attachment decomposition (QR Code URLs + OCR text)
     is_image = (

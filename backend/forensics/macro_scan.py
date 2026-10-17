@@ -57,6 +57,7 @@ def analyze_macro_behavior(data: bytes, filename: str = "") -> dict:
     result = {
         "has_macro": False,
         "suspicious": False,
+        "parse_failed": False,
         "autoexec_triggers": [],
         "suspicious_actions": [],
         "referenced_iocs": [],
@@ -70,9 +71,10 @@ def analyze_macro_behavior(data: bytes, filename: str = "") -> dict:
         vba = VBA_Parser(filename or "attachment", data=data)
     except Exception:
         # Not a parseable Office file, corrupted, or password-protected --
-        # treat as "no macro detected" rather than crashing the pipeline.
-        # (Password-protected Office docs are themselves suspicious and
-        # should be flagged separately by the caller based on parse failure.)
+        # flag parse failure so the caller can decide how to treat it.
+        # Password-protected Office docs are themselves suspicious and
+        # should be escalated by the caller.
+        result["parse_failed"] = True
         return result
 
     try:

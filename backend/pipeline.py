@@ -177,6 +177,16 @@ def _run_parsed_pipeline(parsed_email) -> dict:
         print(f"[DEBUG Heuristic] URLs found: {ioc_analysis.get('urls')}")
         force_gemini = True
 
+    # If any attachment is flagged suspicious (macros, type mismatch,
+    # password-protected Office doc, disguised executable, QR codes, etc.),
+    # force Gemini to review -- XGBoost metadata features don't capture
+    # attachment content risk.
+    for att in (attachment_analysis.get("attachments") or []):
+        if att.get("suspicious"):
+            print(f"[DEBUG Heuristic] Suspicious attachment detected: {att.get('filename')}")
+            force_gemini = True
+            break
+
     if (
         not force_gemini
         and triage_result.get("available")
