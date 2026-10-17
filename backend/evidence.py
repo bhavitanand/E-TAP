@@ -285,7 +285,7 @@ def _header_items(headers: dict, input_mode: Optional[str]) -> list[dict]:
 # observed: attachments and links
 # ---------------------------------------------------------------------------
 
-def _attachment_items(attachments: list, input_mode: Optional[str]) -> list[dict]:
+def _attachment_items(attachments: list, input_mode: Optional[str], *, qr_traced: bool = False) -> list[dict]:
     items: list[dict] = []
     if input_mode == "quick_content_check":
         items.append(_item(
@@ -342,6 +342,8 @@ def _attachment_items(attachments: list, input_mode: Optional[str]) -> list[dict
         for flag in att.get("flags") or []:
             if not isinstance(flag, str) or flag in {"type_mismatch", "has_macro"}:
                 continue
+            if qr_traced and flag.startswith("hidden QR code"):
+                continue  # replaced by destination-based qr.* items
             found = True
             items.append(_item(
                 f"att.{n}.flag.{re.sub(r'[^a-z0-9]+', '_', flag.lower())[:40]}",
@@ -354,6 +356,8 @@ def _attachment_items(attachments: list, input_mode: Optional[str]) -> list[dict
             ))
         for q, qr in enumerate(att.get("qr_urls") or []):
             found = True
+            if qr_traced:
+                continue
             items.append(_item(
                 f"att.{n}.qr.{q}", KIND_OBSERVED, "attachments",
                 f"{name}: image contains a QR code",
@@ -408,6 +412,175 @@ def _link_items(iocs: dict, input_mode: Optional[str]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# link text vs destination (B5) and QR trace (B6)
+# ---------------------------------------------------------------------------
+
+_MAX_LINK_ITEMS = 5
+
+_FLAG_WORDS = {
+    "text_shows_different_site": "the text shown names a different site than the link goes to",
+    "text_names_brand_link_goes_elsewhere": "the text names a well-known brand but the link goes elsewhere",
+    "userinfo_in_url": "the address hides the real site behind a fake name before an @ sign",
+    "lookalike_domain": "the domain looks like a well-known brand's",
+    "homograph_suspected": "the domain mixes look-alike characters from different alphabets",
+    "punycode_host": "the domain uses an encoded international form",
+    "ip_address_host": "the link goes to a bare IP address instead of a name",
+    "url_shortener": "the link uses a URL shortener, which hides the destination",
+    "redirect_parameter_to_other_site": "the link contains a redirect to another site",
+    "non_standard_port": "the link uses an unusual port",
+    "non_web_scheme": "the link runs a script or embeds data instead of opening a site",
+}
+_STRONG_FLAGS = {"userinfo_in_url", "homograph_suspected", "non_web_scheme"}
+
+
+def _host_label(link: dict) -> str:
+    return _clip(link.get("host") or "(no host)", 80)
+
+
+def _link_risk(link: dict) -> tuple[str, str]:
+    """(direction, weight) for one analysed link. Weak unless the signal is hard to explain innocently."""
+    flags = set(link.get("flags") or [])
+    risky = flags - {"plain_http"}
+    if not risky:
+        return NEUTRAL, WEAK
+    if risky & _STRONG_FLAGS:
+        return RAISES, STRONG
+    mismatch = {"text_shows_different_site", "text_names_brand_link_goes_elsewhere"} & risky
+    # a mismatch that also looks like a fake (lookalike, bare IP, shortener) is strong;
+    # on its own it also happens with legitimate tracking redirects
+    if mismatch and risky & {"lookalike_domain", "ip_address_host", "url_shortener"}:
+        return RAISES, STRONG
+    return RAISES, WEAK
+
+
+def _link_analysis_items(link_analysis: Optional[dict], iocs: dict, input_mode: Optional[str]) -> list[dict]:
+    items: list[dict] = []
+    if input_mode == "quick_content_check":
+        return items  # link.scope already says link targets were not available
+    la = link_analysis or {}
+    has_urls = bool((iocs or {}).get("urls"))
+    if not la.get("available"):
+        if has_urls:
+            items.append(_item(
+                "link.text_check", KIND_OBSERVED, "links",
+                "Link text could not be compared with where the links go",
+                source="link_analysis", status=STATUS_UNAVAILABLE,
+                detail=la.get("reason") or "No HTML body in this message.",
+                why="Without the HTML, the text a reader sees for each link is not available.",
+            ))
+        return items
+
+    links = la.get("links") or []
+    flagged = [l for l in links if set(l.get("flags") or []) - {"plain_http"}]
+    for i, link in enumerate(flagged[:_MAX_LINK_ITEMS]):
+        direction, weight = _link_risk(link)
+        flags = [f for f in link["flags"] if f in _FLAG_WORDS]
+        shown = link.get("display_text") or ""
+        if link.get("display_host"):
+            title = f"A link says “{_clip(link['display_host'], 50)}” but goes to {_host_label(link)}"
+        elif "text_names_brand_link_goes_elsewhere" in flags:
+            title = f"A link mentioning {_clip((link.get('details') or {}).get('brand_named', 'a brand'), 40)} goes to {_host_label(link)}"
+        else:
+            title = f"Link to {_host_label(link)} looks unusual"
+        details = "; ".join(_FLAG_WORDS[f] for f in flags)
+        inferred = (link.get("details") or {}).get("inferred_target_host")
+        if inferred:
+            details += f". Inferred, not observed: it appears to redirect to {_clip(inferred, 60)}"
+        items.append(_item(
+            f"link.flag.{i}", KIND_OBSERVED, "links", title,
+            source="link_analysis", detail=_clip(details[:1].upper() + details[1:], 400),
+            direction=direction, weight=weight,
+            why=("The address a reader sees is not where the link goes. Phishing messages often "
+                 "hide the real site this way."
+                 if weight == STRONG else
+                 "This can be a sign of a disguised link, but legitimate mail also uses tracking "
+                 "and redirect links, so weigh it with the other evidence."),
+            data={"host": link.get("host"), "flags": link.get("flags")},
+        ))
+    if len(flagged) > _MAX_LINK_ITEMS:
+        items.append(_item(
+            "link.flag.more", KIND_OBSERVED, "links",
+            f"{len(flagged) - _MAX_LINK_ITEMS} more unusual links not listed",
+            source="link_analysis", direction=RAISES, weight=WEAK,
+        ))
+    if links and not flagged:
+        items.append(_item(
+            "link.text_ok", KIND_OBSERVED, "links",
+            f"Link text matched the destination for {len(links)} link{'s' if len(links) != 1 else ''}",
+            source="link_analysis",
+            why="This only compares what the message says with where the link points. "
+                "It does not show that the destination is safe.",
+        ))
+    if links or has_urls:
+        items.append(_item(
+            "link.resolution", KIND_OBSERVED, "links",
+            "Where the links finally lead was not checked",
+            source="link_analysis", status=STATUS_UNAVAILABLE,
+            detail="E-TAP reads the address in the message. It does not follow redirects or visit the page.",
+            why="A link can redirect elsewhere after it is clicked.",
+        ))
+    return items
+
+
+def _qr_items(qr_trace: Optional[dict]) -> list[dict]:
+    items: list[dict] = []
+    for n, entry in enumerate((qr_trace or {}).get("entries") or []):
+        name = _clip(entry.get("source_attachment") or f"image {n + 1}", 60)
+        status = entry.get("status")
+        if not entry.get("checked"):
+            reason = {
+                "decoder_unavailable": "no QR decoder is installed on the server",
+                "image_unreadable": "the image could not be opened",
+            }.get(status, "the scan failed")
+            items.append(_item(
+                f"qr.{n}.unchecked", KIND_OBSERVED, "attachments",
+                f"{name}: could not be checked for a QR code",
+                source="qr_trace", status=STATUS_UNAVAILABLE, detail=f"Reason: {reason}.",
+                why="If the image holds a QR code, its destination is unknown.",
+            ))
+            continue
+        if not entry.get("decoded"):
+            items.append(_item(
+                f"qr.{n}.none", KIND_OBSERVED, "attachments",
+                f"{name}: no QR code found",
+                source="qr_trace", status=STATUS_ABSENT,
+            ))
+            continue
+        for q, dec in enumerate(entry["decoded"]):
+            if dec.get("kind") != "url":
+                items.append(_item(
+                    f"qr.{n}.{q}.text", KIND_OBSERVED, "attachments",
+                    f"{name}: QR code holds text, not a web address",
+                    source="qr_trace",
+                    why="It does not open a website, though some phone apps act on QR text.",
+                ))
+                continue
+            link = dec["link"]
+            direction, weight = _link_risk(link)
+            flags = [f for f in link["flags"] if f in _FLAG_WORDS]
+            if dec["link"].get("personalised"):
+                flags.append("personalised")
+            words = [(_FLAG_WORDS.get(f) or "the address carries a value that looks specific to one recipient")
+                     for f in flags]
+            detail = (f"Decoded address: {_display_url(link['href'])}. "
+                      + ("; ".join(words)[:1].upper() + "; ".join(words)[1:] + ". " if words else
+                         "No link red flags were seen in the address itself. ")
+                      + "Redirects were not followed.")
+            if dec["link"].get("personalised") and direction == NEUTRAL:
+                direction, weight = RAISES, WEAK
+            items.append(_item(
+                f"qr.{n}.{q}", KIND_OBSERVED, "attachments",
+                f"{name}: QR code leads to {_host_label(link)}",
+                source="qr_trace", detail=detail, direction=direction, weight=weight,
+                why="A QR code hides its destination from the eye, and phones often skip the "
+                    "protection a computer has. A QR code alone is not a warning sign: the "
+                    "address it holds is what is judged.",
+                data={"host": link.get("host"), "flags": link.get("flags"), "image": name},
+            ))
+    return items
+
+
+# ---------------------------------------------------------------------------
 # reputation
 # ---------------------------------------------------------------------------
 
@@ -417,6 +590,7 @@ _UNAVAILABLE_REASON = {
     "rate_limited_internal": "provider rate limit reached",
     "error": "request failed",
     "private_or_reserved": "private or reserved address, not looked up",
+    "skipped_privacy": "not sent to VirusTotal because the link looks like it holds personal or secret values",
 }
 
 _SECTIONS = (
@@ -620,12 +794,16 @@ def build_evidence_ledger(
     threat_intel: Optional[dict] = None,
     correlation: Optional[dict] = None,
     input_mode: Optional[str] = None,
+    link_analysis: Optional[dict] = None,
+    qr_trace: Optional[dict] = None,
 ) -> list[dict]:
     """Observed + reputation items. Deterministic; no model involved."""
     items: list[dict] = []
     items += _header_items(headers or {}, input_mode)
     items += _link_items(iocs or {}, input_mode)
-    items += _attachment_items(attachments or [], input_mode)
+    items += _link_analysis_items(link_analysis, iocs or {}, input_mode)
+    items += _attachment_items(attachments or [], input_mode, qr_traced=qr_trace is not None)
+    items += _qr_items(qr_trace)
     items += _reputation_items(threat_intel)
     items += _correlation_items(correlation)
     return items
@@ -841,7 +1019,7 @@ def _what_to_do(
             name = (it.get("data") or {}).get("filename")
             if name and not any(s["ref"] == f"att:{name}" for s in steps):
                 steps.append({"text": f"Do not open the attachment “{name}”.", "basis": "evidence", "ref": f"att:{name}"})
-        elif ".qr." in it["id"]:
+        elif it["id"].startswith("qr.") and it["direction"] == RAISES:
             steps.append({"text": "Do not scan the QR code. Type the site's address yourself instead.", "basis": "evidence", "ref": it["id"]})
         elif it["id"] == "hdr.flag.reply_to_domain_mismatch":
             steps.append({"text": "Do not reply to this message: replies would go to a different domain than the sender.", "basis": "evidence", "ref": it["id"]})
@@ -896,6 +1074,8 @@ def build_evidence_report(
     provenance: Optional[dict] = None,
     input_mode: Optional[str] = None,
     reconstructed: bool = False,
+    link_analysis: Optional[dict] = None,
+    qr_trace: Optional[dict] = None,
 ) -> dict:
     final_assessment = final_assessment or {}
     provenance = provenance or {}
@@ -906,6 +1086,7 @@ def build_evidence_report(
     ledger = build_evidence_ledger(
         headers=headers, attachments=attachments, iocs=iocs,
         threat_intel=threat_intel, correlation=correlation, input_mode=input_mode,
+        link_analysis=link_analysis, qr_trace=qr_trace,
     )
     valid_ids = {i["id"] for i in ledger}
     items = ledger + _ai_items(final_assessment, content_classification or {}, valid_ids, triage)
@@ -988,4 +1169,6 @@ def build_for_stored_record(doc: dict, decision: dict) -> dict:
         provenance=provenance,
         input_mode=provenance.get("input_mode"),
         reconstructed=True,
+        link_analysis=doc.get("link_analysis"),
+        qr_trace=doc.get("qr_trace"),
     )

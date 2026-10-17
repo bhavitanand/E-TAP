@@ -217,6 +217,11 @@ async def get_investigation(request: Request, email_id: str) -> dict:
             # Stored with the record when available; older records are rebuilt
             # from what they kept and marked `reconstructed`.
             "evidence_report": doc.get("evidence_report") or build_for_stored_record(doc, decision),
+            # B5/B6/B10: absent on records saved before these existed (not rebuilt:
+            # the stored record never kept the HTML or the images).
+            "link_analysis": doc.get("link_analysis"),
+            "qr_trace": doc.get("qr_trace"),
+            "privacy_report": doc.get("privacy_report"),
             "email": {
                 "subject": doc.get("subject", "(No Subject Header)"),
                 "from_raw": doc.get("from_email", ""),

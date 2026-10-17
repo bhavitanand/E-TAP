@@ -17,6 +17,9 @@ from email_parser import parse_email, parse_email_from_upload
 from forensics.header_forensics import analyze_headers
 from forensics.attachment_forensics import analyze_attachments
 from forensics.ioc_extraction import extract_iocs
+from forensics.link_analysis import analyze_links
+from forensics.qr_trace import build_qr_trace
+from privacy import build_privacy_report
 from threat_intel import enrich_iocs
 from correlation import correlate_and_store
 from db import connection, repository
@@ -116,6 +119,11 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         header_analysis=header_analysis,
     )
 
+    # B5/B6: what each link's visible text claims vs where it points, and where
+    # QR codes lead. Static only: nothing is fetched or followed.
+    link_analysis = analyze_links(data.get("body_html"))
+    qr_trace = build_qr_trace(attachment_analysis.get("attachments"))
+
     threat_intel_live = _env_truthy("THREAT_INTEL_LIVE", default="0")
     threat_intel_analysis = enrich_iocs(ioc_analysis, live_lookup=threat_intel_live)
 
@@ -181,6 +189,8 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         threat_intel=threat_intel_analysis,
         correlation=correlation_result,
         input_mode=source,
+        link_analysis=link_analysis,
+        qr_trace=qr_trace,
     )
 
     context = {
@@ -339,6 +349,14 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         triage=triage_summary,
         provenance=analysis_provenance,
         input_mode=source,
+        link_analysis=link_analysis,
+        qr_trace=qr_trace,
+    )
+    privacy_report = build_privacy_report(
+        email=email_summary,
+        iocs=ioc_analysis,
+        threat_intel=threat_intel_analysis,
+        provenance=analysis_provenance,
     )
 
     stage_status = {
@@ -362,6 +380,9 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
             "stage_status": stage_status,
             "verdict_band": decision["verdict_band"],
             "evidence_report": evidence_report,
+            "link_analysis": link_analysis,
+            "qr_trace": qr_trace,
+            "privacy_report": privacy_report,
             "content_analysis": ai_analysis.get("content_classification"),
             "final_assessment": final_assessment,
             "mitre_attack": ai_analysis.get("mitre_attack", []),
@@ -384,6 +405,9 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         "verdict_band": decision["verdict_band"],
         "analysis_provenance": analysis_provenance,
         "evidence_report": evidence_report,
+        "link_analysis": link_analysis,
+        "qr_trace": qr_trace,
+        "privacy_report": privacy_report,
         "email": context["email"],
         "headers": header_analysis,
         "attachments": attachment_analysis.get("attachments", []),

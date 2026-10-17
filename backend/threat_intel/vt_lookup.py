@@ -130,7 +130,31 @@ def _vt_lookup(cache_key: str, path: str) -> dict:
 
 
 def check_url_reputation(url: str) -> dict:
-    return _vt_lookup(f"vt_url:{url}", f"urls/{_url_to_vt_id(url)}")
+    """
+    Look a URL up on VirusTotal, after the privacy policy in privacy.py.
+
+    VirusTotal can add queried URLs to a dataset shared with its community, and
+    phishing links often carry the recipient's address or a token. So the URL is
+    either sent as-is (nothing sensitive, no query string), trimmed to
+    scheme://host/path, or not sent at all. A skipped lookup is "unknown",
+    never "clean".
+    """
+    from privacy import plan_url_lookup  # local import: avoid a package-level cycle
+
+    plan = plan_url_lookup(url)
+    if plan["action"] == "skip":
+        return {
+            "malicious": None,
+            "status": "skipped_privacy",
+            "privacy_reasons": plan["reasons"],
+            "reason": "Not sent to VirusTotal: the link looks like it contains personal or secret values.",
+        }
+    lookup_url = plan["lookup_url"]
+    result = _vt_lookup(f"vt_url:{lookup_url}", f"urls/{_url_to_vt_id(lookup_url)}")
+    if plan["action"] == "trimmed":
+        # copy: the cached dict is shared between callers
+        result = dict(result, lookup_url_trimmed=True)
+    return result
 
 
 def check_hash_reputation(file_hash: str) -> dict:

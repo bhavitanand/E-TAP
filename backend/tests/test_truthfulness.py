@@ -43,12 +43,15 @@ def test_vt_429_is_not_cached():
 
 def test_vt_network_failure_is_not_cached_and_does_not_leak_url():
     _reset_vt()
-    secret_url = "http://example.test/reset?token=SECRET123"
+    # B10: a URL with a token is now skipped before any request (see
+    # test_links_qr_privacy.py). The error path still must not echo the URL
+    # that WAS sent, so use one that passes the privacy policy.
+    secret_url = "http://example.test/account/orders"
     boom = requests.ConnectionError(f"HTTPSConnectionPool ... /urls/{vt_lookup._url_to_vt_id(secret_url)}")
     with patch("threat_intel.vt_lookup.requests.get", side_effect=[boom, _ok_response()]) as get:
         first = vt_lookup.check_url_reputation(secret_url)
         assert first["malicious"] is None and first["status"] == "error"
-        assert "SECRET123" not in first["error"]
+        assert "account/orders" not in first["error"]
         assert vt_lookup._url_to_vt_id(secret_url) not in first["error"]
         vt_lookup.check_url_reputation(secret_url)
         assert get.call_count == 2
