@@ -292,3 +292,56 @@
   font-size: var(--fs-xs);
   color: var(--text-muted);
 }
+
+/* ---- Verdict evidence: observed / why it matters / what to do (B1 + B9) ---- */
+.evidence-narrative { padding-bottom: 8px; }
+.ev-headline { margin: 4px 0 14px; font-size: var(--fs-md); line-height: 1.5; color: var(--text-primary); border-left: 3px solid var(--border-hairline); padding-left: 12px; }
+.ev-headline-danger { border-left-color: var(--verdict-danger); }
+.ev-headline-caution { border-left-color: var(--verdict-caution); }
+.ev-headline-safe { border-left-color: var(--verdict-safe); }
+
+.ev-limits { margin: 0 0 16px; padding: 10px 12px; border-left: 3px solid var(--verdict-caution); background: var(--verdict-caution-bg); font-size: var(--fs-xs); color: var(--text-secondary); }
+.ev-limits-title { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.ev-limits ul { margin: 0; padding-left: 18px; }
+
+.ev-block { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--border-hairline); }
+.ev-block-title { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: var(--fs-base); font-weight: 600; color: var(--text-primary); }
+.ev-step { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-amber-dim); color: var(--accent-amber); font-size: var(--fs-micro); font-weight: 700; }
+.ev-block-sub { margin: 0 0 10px; font-size: var(--fs-xs); color: var(--text-muted); }
+.ev-subhead { margin: 14px 0 6px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); }
+
+.ev-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ev-row, .ev-reason { padding: 8px 10px; background: var(--bg-surface-subtle); border: 1px solid var(--border-hairline); border-radius: 2px; }
+.ev-status-unavailable { border-style: dashed; }
+.ev-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.ev-row-title { font-size: var(--fs-sm); color: var(--text-primary); overflow-wrap: anywhere; }
+.ev-row-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.ev-row-detail { margin-top: 3px; font-size: var(--fs-xs); color: var(--text-secondary); overflow-wrap: anywhere; }
+.ev-why { margin-top: 4px; font-size: var(--fs-xs); color: var(--text-secondary); line-height: 1.5; }
+.ev-based-on { margin-top: 4px; font-size: var(--fs-micro); color: var(--text-muted); }
+
+.ev-chip { padding: 1px 7px; border-radius: 10px; font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border-hairline); color: var(--text-secondary); white-space: nowrap; }
+.ev-kind-observed { color: #6FA8DC; border-color: rgba(111, 168, 220, 0.4); }
+.ev-kind-reputation { color: #B79AE0; border-color: rgba(183, 154, 224, 0.4); }
+.ev-kind-ai_inferred { color: var(--accent-amber); border-color: rgba(232, 162, 61, 0.4); }
+.ev-ungrounded { color: var(--verdict-caution); border-color: rgba(232, 162, 61, 0.5); }
+.ev-grounded { color: var(--verdict-safe); border-color: rgba(76, 175, 125, 0.4); }
+.ev-dir { font-size: var(--fs-micro); font-weight: 600; white-space: nowrap; }
+.ev-dir-raises_risk { color: var(--verdict-danger); }
+.ev-dir-lowers_risk { color: var(--verdict-safe); }
+
+.ev-notchecked, .ev-ai { margin-top: 12px; font-size: var(--fs-xs); color: var(--text-secondary); }
+.ev-notchecked summary, .ev-ai summary { cursor: pointer; margin-bottom: 8px; }
+.ev-ai-summary { margin: 0 0 8px; line-height: 1.5; }
+.ev-ai-source { color: var(--text-muted); }
+.ev-steps { margin: 6px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); color: var(--text-primary); line-height: 1.5; }
+.ev-footnote { margin: 16px 0 6px; font-size: var(--fs-micro); color: var(--text-muted); }
+
+@media (max-width: 640px) {
+  .ev-row-head { flex-direction: column; }
+}
+@media print {
+  .evidence-narrative details { display: block; }
+  .evidence-narrative details > summary { font-weight: 600; }
+  .ev-row, .ev-reason { background: #FFFFFF !important; border-color: #CCCCCC !important; }
+}

@@ -158,12 +158,13 @@ function renderResult(container, existing, key, report) {
     const headings = {
         danger: `🚨 High risk: ${verdict}`,
         caution: `⚠️ ${verdict}`,
-        safe: '✅ No high-risk signals in the visible content',
+        // Not a green check: "nothing found" in a partial view is not "safe".
+        safe: 'ℹ️ No high-risk signals found in the visible text',
     };
 
     const assessment = (report.ai_analysis && report.ai_analysis.final_assessment) || {};
-    const explanation = assessment.explanation || 'No explanation provided.';
-    const evidence = Array.isArray(assessment.supporting_evidence) ? assessment.supporting_evidence.slice(0, 4) : [];
+    const er = report.evidence_report || null;
+    const explanation = (er && er.headline) || assessment.explanation || 'No explanation provided.';
 
     const banner = newBanner(`${bandClass} etap-banner-rich`, key);
 
@@ -174,13 +175,46 @@ function renderResult(container, existing, key, report) {
     );
     banner.append(head, el('div', 'etap-explanation', explanation));
 
-    if (evidence.length) {
-        const details = el('details', 'etap-details');
-        details.append(el('summary', null, `Why (${evidence.length} point${evidence.length === 1 ? '' : 's'})`));
-        const list = el('ul');
-        evidence.forEach((item) => list.append(el('li', null, String(item))));
-        details.append(list);
-        banner.append(details);
+    if (er && Array.isArray(er.evidence)) {
+        const KIND = { observed: 'Observed', reputation: 'Reputation', ai_inferred: 'AI-inferred' };
+        const byId = {};
+        er.evidence.forEach((i) => { byId[i.id] = i; });
+        const reasons = (er.top_reasons || []).map((id) => byId[id]).filter(Boolean);
+
+        if (reasons.length) {
+            const details = el('details', 'etap-details');
+            details.append(el('summary', null, `Why (${reasons.length} point${reasons.length === 1 ? '' : 's'})`));
+            const list = el('ul');
+            reasons.forEach((i) => list.append(el('li', null, `[${KIND[i.kind] || i.kind}] ${i.title}`)));
+            details.append(list);
+            banner.append(details);
+        }
+
+        const limits = (er.conclusion && er.conclusion.limitations) || [];
+        if (limits.length) {
+            const details = el('details', 'etap-details');
+            details.append(el('summary', null, `Not checked (${limits.length}). Unknown is not safe.`));
+            const list = el('ul');
+            limits.forEach((l) => list.append(el('li', null, String(l))));
+            details.append(list);
+            banner.append(details);
+        }
+
+        const steps = (er.what_to_do && er.what_to_do.steps) || [];
+        if (steps.length) {
+            banner.append(el('div', 'etap-explanation', `Next step: ${steps[0].text}`));
+        }
+    } else {
+        // Older backend without evidence_report: keep the previous behaviour.
+        const evidence = Array.isArray(assessment.supporting_evidence) ? assessment.supporting_evidence.slice(0, 4) : [];
+        if (evidence.length) {
+            const details = el('details', 'etap-details');
+            details.append(el('summary', null, `Why (${evidence.length} point${evidence.length === 1 ? '' : 's'})`));
+            const list = el('ul');
+            evidence.forEach((item) => list.append(el('li', null, String(item))));
+            details.append(list);
+            banner.append(details);
+        }
     }
 
     const chips = el('div', 'etap-chips');

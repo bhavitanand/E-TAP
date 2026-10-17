@@ -12,6 +12,7 @@ export function VerdictBanner({
   verdict = 'UNKNOWN',
   riskScore = 0,
   confidence = 0,
+  confidenceLevel = null,
   explanation = '',
   triage = null,
   band = null,
@@ -31,7 +32,7 @@ export function VerdictBanner({
       <div className="verdict-main-content">
         <div className="verdict-text-group">
           <div className="verdict-classification-tag" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span>FORENSIC VERDICT &bull; CONFIDENCE: {confidencePct}% &bull; {triage?.gemini_skipped ? "STAGE C' EVALUATION" : 'STAGE G EVALUATION'}</span>
+            <span>FORENSIC VERDICT &bull; {confidenceLevel ? `EVIDENCE CONFIDENCE: ${String(confidenceLevel).toUpperCase()}` : `CONFIDENCE: ${confidencePct}%`} &bull; {triage?.gemini_skipped ? "STAGE C' EVALUATION" : 'STAGE G EVALUATION'}</span>
           </div>
           <h2 className={`verdict-headline ${statusClass}`}>{label}</h2>
           <p className="verdict-summary-p">

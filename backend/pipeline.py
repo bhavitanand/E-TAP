@@ -22,6 +22,7 @@ from correlation import correlate_and_store
 from db import connection, repository
 from ai_engine.stage_g import analyze_with_stage_g
 from verdicts import finalize_verdict, LIKELY_LEGITIMATE
+from evidence import build_evidence_ledger, build_evidence_report, compact_ledger
 
 logger = logging.getLogger("E-TAP.pipeline")
 
@@ -171,6 +172,17 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         existing_body = email_summary.get("body_text") or ""
         email_summary["body_text"] = existing_body + "".join(ocr_snippets)
 
+    # Deterministic observed + reputation evidence, with stable ids. The model
+    # sees these ids and must cite them; see evidence.py and ai_findings.
+    evidence_ledger = build_evidence_ledger(
+        headers=header_analysis,
+        attachments=attachment_analysis.get("attachments") or [],
+        iocs=ioc_analysis,
+        threat_intel=threat_intel_analysis,
+        correlation=correlation_result,
+        input_mode=source,
+    )
+
     context = {
         "email": email_summary,
         "header_forensics": header_analysis,
@@ -179,6 +191,7 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         "threat_intelligence": threat_intel_analysis,
         "correlation": correlation_result,
         "graph_diffusion": graph_diffusion_result,
+        "evidence_ledger": compact_ledger(evidence_ledger),
     }
 
     # Stage C' -- Fast Metadata Triage Pre-Filter (XGBoost)
@@ -308,6 +321,26 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
     final_assessment.pop("fallback_reason", None)
     (ai_analysis.get("content_classification") or {}).pop("fallback_reason", None)
 
+    triage_summary = {
+        "triage_label": triage_result.get("label"),
+        "triage_confidence": triage_result.get("confidence"),
+        "gemini_skipped": gemini_skipped,
+        "available": triage_result.get("available", False),
+    }
+    evidence_report = build_evidence_report(
+        decision=decision,
+        final_assessment=final_assessment,
+        content_classification=ai_analysis.get("content_classification"),
+        headers=header_analysis,
+        attachments=attachment_analysis.get("attachments") or [],
+        iocs=ioc_analysis,
+        threat_intel=threat_intel_analysis,
+        correlation=correlation_result,
+        triage=triage_summary,
+        provenance=analysis_provenance,
+        input_mode=source,
+    )
+
     stage_status = {
         "A": "complete",
         "B": "complete" if not quick_check else "headers_unavailable",
@@ -328,6 +361,7 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
             "analysis_provenance": analysis_provenance,
             "stage_status": stage_status,
             "verdict_band": decision["verdict_band"],
+            "evidence_report": evidence_report,
             "content_analysis": ai_analysis.get("content_classification"),
             "final_assessment": final_assessment,
             "mitre_attack": ai_analysis.get("mitre_attack", []),
@@ -349,6 +383,7 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         "verdict": final_assessment.get("verdict"),
         "verdict_band": decision["verdict_band"],
         "analysis_provenance": analysis_provenance,
+        "evidence_report": evidence_report,
         "email": context["email"],
         "headers": header_analysis,
         "attachments": attachment_analysis.get("attachments", []),

@@ -27,6 +27,7 @@ from slowapi.errors import RateLimitExceeded
 from email_parser.unified_parser import UnsupportedFileTypeError
 from pipeline import analyze_email_upload, VALID_SOURCES
 from verdicts import finalize_verdict
+from evidence import build_for_stored_record
 
 logger = logging.getLogger("E-TAP.api")
 
@@ -213,6 +214,9 @@ async def get_investigation(request: Request, email_id: str) -> dict:
             "verdict": decision["verdict"],
             "verdict_band": decision["verdict_band"],
             "analysis_provenance": doc.get("analysis_provenance"),
+            # Stored with the record when available; older records are rebuilt
+            # from what they kept and marked `reconstructed`.
+            "evidence_report": doc.get("evidence_report") or build_for_stored_record(doc, decision),
             "email": {
                 "subject": doc.get("subject", "(No Subject Header)"),
                 "from_raw": doc.get("from_email", ""),

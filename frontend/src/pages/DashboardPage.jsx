@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useInvestigation } from '../context/InvestigationContext';
 
 import VerdictBanner from '../components/report/VerdictBanner';
+import EvidenceNarrative from '../components/report/EvidenceNarrative';
 import HeaderAnalysis from '../components/report/HeaderAnalysis';
 import AttachmentTable from '../components/report/AttachmentTable';
 import ContentAnalysis from '../components/report/ContentAnalysis';
@@ -245,12 +246,16 @@ export function DashboardPage() {
             verdict={verdict}
             riskScore={risk_score}
             confidence={finalAssessment.confidence}
-            explanation={finalAssessment.explanation}
+            explanation={data.evidence_report?.headline || finalAssessment.explanation}
+            confidenceLevel={data.evidence_report?.conclusion?.confidence_level}
             triage={data.triage}
             band={data.verdict_band}
             provenance={data.analysis_provenance}
             stageStatus={data.stage_status}
           />
+
+          {/* What we observed / Why it matters / What to do */}
+          <EvidenceNarrative report={data.evidence_report} />
 
           {/* Core Envelope Header Metadata Card */}
           <div className="forensic-panel">
