@@ -1,0 +1,1 @@
+Each set has multiple emails, half of them are .eml and the other half are .msg, there is no fixed number of benign or spam or phishing email, it is purely random in each set and all sets curated together should ideally cover as many testcases as possible while trying to closely mimic a normal person's inbox, just someone who gets bombarded with malicious emails more than others.
