@@ -26,8 +26,8 @@ export async function analyzeEmailFile(file, onUploadProgress) {
  */
 export async function checkBackendHealth() {
   try {
-    const response = await apiClient.get('/health', { timeout: 15000 });
-    return response.status === 200 && response.data?.status === 'ok';
+    const response = await apiClient.get('/ready', { timeout: 10000 });
+    return response.status === 200 && response.data?.status === 'ready';
   } catch {
     return false;
   }

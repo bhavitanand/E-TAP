@@ -17,6 +17,7 @@ except ImportError:
 
 import logging
 import asyncio
+from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,7 +39,7 @@ app = FastAPI(title="Threat Email Analysis Platform")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS configuration: default to * in dev, configure ALLOWED_ORIGINS in production
+# CORS uses explicit origins in both local development and production.
 allowed_origins_raw = os.environ.get("ALLOWED_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173")
 allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
 
@@ -76,16 +77,47 @@ def startup_event():
         print(f"  [DATABASE]  Active Database: '{db.name}'")
         print(f"  [SECURITY]  Rate limiter configured (per-endpoint limits apply)")
         print(f"  [SECURITY]  Upload Limit: 25 MB | XSS Iframe Isolation active")
-        print(f"  [STATUS]    Ready to receive forensic email artifacts on port 5000")
+        print(f"  [STATUS]    Ready to receive forensic email artifacts on port {os.environ.get('PORT', '5000')}")
     except Exception as exc:
         print(f"  [DB ERROR]  Connection failed: {exc}")
     print("=" * 68 + "\n")
 
 
+@app.api_route("/", methods=["GET", "HEAD"])
+@limiter.exempt
+def root() -> dict:
+    """Small service index; the root URL is not an analysis endpoint."""
+    return {"service": "E-TAP API", "status": "online", "health": "/health", "readiness": "/ready", "docs": "/docs"}
+
+
 @app.get("/health")
 @limiter.exempt
 def health() -> dict:
-    return {"status": "ok"}
+    """Liveness probe: confirms the web process can answer requests."""
+    return {"status": "ok", "check": "liveness"}
+
+
+@app.get("/ready")
+@limiter.exempt
+def ready() -> Any:
+    """Readiness probe: checks that the configured database is reachable."""
+    from db.connection import get_db
+    from fastapi.responses import JSONResponse
+    try:
+        db = get_db()
+        if os.environ.get("USE_FAKE_DB") == "1":
+            database_status = "in_memory_fake"
+        else:
+            # MongoDB Database.command performs a real round-trip ping.
+            db.command("ping")
+            database_status = "ok"
+        return {"status": "ready", "checks": {"database": database_status}}
+    except Exception as exc:
+        logger.warning("Readiness check failed (%s)", type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "checks": {"database": "unavailable"}},
+        )
 
 
 @app.post("/analyze", response_model=None)
@@ -139,7 +171,6 @@ async def analyze(
         ) from None
 
 
-from typing import Optional, Any
 from pydantic import BaseModel, Field
 
 
@@ -222,6 +253,7 @@ async def get_investigation(request: Request, email_id: str) -> dict:
             "link_analysis": doc.get("link_analysis"),
             "qr_trace": doc.get("qr_trace"),
             "privacy_report": doc.get("privacy_report"),
+            "provider_status": doc.get("provider_status"),
             "email": {
                 "subject": doc.get("subject", "(No Subject Header)"),
                 "from_raw": doc.get("from_email", ""),

@@ -245,6 +245,8 @@ export function generatePdfDocument(data, options = {}) {
     data.historical_correlation || correlation.historical_stats || {};
   const finalAssessment = ai_analysis.final_assessment || {};
   const contentClassification = ai_analysis.content_classification || {};
+  const providerStatus = data.provider_status || {};
+  const privacyReport = data.privacy_report || {};
   const evidenceAssessments = finalAssessment.evidence_assessments || [];
   const mitreAttack =
     (finalAssessment.mitre_attack && finalAssessment.mitre_attack.length > 0
@@ -617,8 +619,67 @@ export function generatePdfDocument(data, options = {}) {
     });
   }
 
-  // ---------- Technical appendix ----------
-  y = sectionTitle(doc, '11. Technical Appendix', 'Execution metadata for analyst traceability', y);
+  // ---------- 11. Provider status and analysis coverage ----------
+  y = sectionTitle(doc, '11. Provider Status & Coverage', 'Provider availability is separate from the threat verdict', y);
+  const providerEntries = Object.entries(providerStatus.providers || {});
+  if (providerStatus.summary) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(...(providerStatus.coverage_status === 'complete' ? COLORS.safe : COLORS.caution));
+    const summaryLines = doc.splitTextToSize(safe(providerStatus.summary), 515);
+    y = ensureSpace(doc, y, summaryLines.length * 12 + 8);
+    doc.text(summaryLines, PAGE_MARGIN, y);
+    y += summaryLines.length * 12 + 8;
+  }
+  if (providerEntries.length) {
+    y = tableBlock(doc, y, {
+      head: [['Provider', 'Status', 'Summary']],
+      body: providerEntries.map(([id, provider]) => [
+        safe(provider?.name || id),
+        safe(provider?.status, 'unknown').replaceAll('_', ' '),
+        safe(provider?.summary),
+      ]),
+      styles: { fontSize: 7.2, cellPadding: 4, overflow: 'linebreak' },
+      columnStyles: { 0: { cellWidth: 105 }, 1: { cellWidth: 90 } },
+    });
+  } else {
+    y = keyValueGrid(doc, [['Provider status', 'Not present in this stored report; re-analyze to collect it.']], y);
+  }
+  if (providerStatus.analysis_duration_ms != null) {
+    y = keyValueGrid(doc, [['Core analysis duration', `${safe(providerStatus.analysis_duration_ms)} ms`]], y);
+  }
+
+  // ---------- 12. Privacy and data flows ----------
+  y = sectionTitle(doc, '12. Privacy & Data Flow', 'What was processed, stored, sent, cached or deliberately skipped', y);
+  const urlLookups = privacyReport.url_lookups || {};
+  y = keyValueGrid(doc, [
+    ['External lookups', privacyReport.external_lookups_enabled ? 'Enabled' : 'Disabled'],
+    ['URLs extracted', urlLookups.total_urls ?? 0],
+    ['Remote full URL requests', urlLookups.sent_in_full ?? 0],
+    ['Remote URL requests with query/fragment removed', urlLookups.sent_trimmed ?? 0],
+    ['Cached URL results reused', (urlLookups.cached_full || 0) + (urlLookups.cached_trimmed || 0)],
+    ['URLs skipped for privacy', (urlLookups.skipped_for_privacy || []).length],
+    ['URLs skipped by policy/limits', (urlLookups.skipped_by_policy || []).length],
+  ], y);
+  const flowEntries = privacyReport.flows || [];
+  if (flowEntries.length) {
+    y = tableBlock(doc, y, {
+      head: [['Data flow', 'Status', 'What is involved']],
+      body: flowEntries.map((flow) => [
+        safe(flow.name),
+        safe(flow.status).replaceAll('_', ' '),
+        (flow.sends || []).map((item) => safe(item)).join('; '),
+      ]),
+      styles: { fontSize: 6.8, cellPadding: 4, overflow: 'linebreak' },
+      columnStyles: { 0: { cellWidth: 110 }, 1: { cellWidth: 80 } },
+    });
+  }
+  if (Array.isArray(privacyReport.caveats) && privacyReport.caveats.length) {
+    y = bulletList(doc, privacyReport.caveats, y);
+  }
+
+  // ---------- 13. Technical appendix ----------
+  y = sectionTitle(doc, '13. Technical Appendix', 'Execution metadata for analyst traceability', y);
   y = keyValueGrid(
     doc,
     [

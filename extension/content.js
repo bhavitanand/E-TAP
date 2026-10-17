@@ -137,6 +137,16 @@ function provenanceChips(report) {
         chips.push(chip('neutral', 'Threat intel: unknown'));
     }
 
+    const providerStatus = report.provider_status || {};
+    if (providerStatus.summary) {
+        const hasCoverageGap = Number(providerStatus.unavailable_count || 0) > 0 ||
+            Number(providerStatus.partial_count || 0) > 0 || providerStatus.coverage_status !== 'complete';
+        const coverageLabel = providerStatus.unavailable_count
+            ? `Provider coverage: ${providerStatus.unavailable_count} unavailable`
+            : (providerStatus.partial_count ? 'Provider coverage: partial' : `Provider coverage: ${providerStatus.coverage_status || 'unknown'}`);
+        chips.push(chip(hasCoverageGap ? 'caution' : 'ok', coverageLabel));
+    }
+
     if (p.gemini_skipped_by_triage) {
         chips.push(chip('neutral', 'AI: triage only'));
     } else if (p.fallback_used) {
@@ -220,6 +230,18 @@ function renderResult(container, existing, key, report) {
     const chips = el('div', 'etap-chips');
     provenanceChips(report).forEach((c) => chips.append(c));
     banner.append(chips);
+
+    const providerStatus = report.provider_status;
+    if (providerStatus && providerStatus.providers && Object.keys(providerStatus.providers).length) {
+        const details = el('details', 'etap-details');
+        details.append(el('summary', null, providerStatus.summary || 'Provider status'));
+        const list = el('ul');
+        Object.entries(providerStatus.providers).forEach(([id, provider]) => {
+            list.append(el('li', null, `${provider.name || id}: ${String(provider.status || 'unknown').replaceAll('_', ' ')} — ${provider.summary || 'No details returned.'}`));
+        });
+        details.append(list);
+        banner.append(details);
+    }
 
     const foot = el('div', 'etap-row etap-foot');
     foot.append(

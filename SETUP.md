@@ -44,7 +44,7 @@ cd backend
 python -m uvicorn app:app --host 127.0.0.1 --port 5000
 ```
 
-Check <http://127.0.0.1:5000/health>. It should return `{"status":"ok"}`. Note that this health route confirms the HTTP process responds; check the backend startup logs separately to confirm a real MongoDB connection.
+Check <http://127.0.0.1:5000/health> for liveness. It should return `{"status":"ok","check":"liveness"}`. Check <http://127.0.0.1:5000/ready> for database readiness; with a reachable real database it returns `{"status":"ready","checks":{"database":"ok"}}`. Startup logs remain useful for diagnosis.
 
 If activation is blocked by PowerShell policy, use `.venv\Scripts\python.exe` directly for the install and Uvicorn commands.
 
@@ -58,7 +58,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173/>. The Vite development proxy forwards `/analyze`, `/health`, `/chat`, and `/investigations` to `http://127.0.0.1:5000`. Leave `VITE_API_BASE_URL` unset in local development unless you intentionally want to bypass that proxy.
+Open <http://127.0.0.1:5173/>. The Vite development proxy forwards `/analyze`, `/health`, `/ready`, `/chat`, and `/investigations` to `http://127.0.0.1:5000`. Leave `VITE_API_BASE_URL` unset in local development unless you intentionally want to bypass that proxy.
 
 ## 4. MongoDB Compass
 
@@ -96,7 +96,7 @@ Live queries transmit indicators to external services. Gemini prompts may contai
 4. Select the repository's `extension/` folder.
 5. Test with a dedicated, non-sensitive mailbox.
 
-By default, `extension/background.js` targets `http://127.0.0.1:5000`, and `extension/content.js` links to `http://127.0.0.1:5173`. The extension scrapes visible Gmail DOM content and constructs a simplified message; it does not recover the original raw message and its complete headers/attachments. To use the hosted deployments, change those two constants to the Render and Vercel URLs noted in `README.md`, confirm `manifest.json` host permissions, then reload the unpacked extension.
+The committed `extension/background.js` targets the hosted Render API and `extension/content.js` links to the hosted Vercel dashboard. For local development, change those constants to `http://127.0.0.1:5000` and `http://127.0.0.1:5173`, confirm `manifest.json` host permissions, then reload the unpacked extension. The extension reads visible Gmail DOM content and constructs a simplified message; it does not recover the original raw message and its complete headers/attachments.
 
 ## Troubleshooting
 

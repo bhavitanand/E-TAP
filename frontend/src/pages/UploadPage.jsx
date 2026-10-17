@@ -299,11 +299,11 @@ export function UploadPage({ onAnalysisComplete }) {
         </div>
       )}
 
-      {/* Live Pipeline Test Strip (Sends real multipart .eml to FastAPI port 5000) */}
+      {/* Live Pipeline Test Strip (uses the configured E-TAP API base URL) */}
       <div className="demo-strip" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="demo-text">
-            <strong>Live Backend Pipeline Test:</strong> Send actual <code>.eml</code> files to <code>POST /analyze</code> on port 5000:
+            <strong>Live Backend Pipeline Test:</strong> Send sample <code>.eml</code> files to the configured E-TAP backend via <code>POST /analyze</code>:
           </div>
           <span className="rail-item-badge">REAL BACKEND PIPELINE</span>
         </div>

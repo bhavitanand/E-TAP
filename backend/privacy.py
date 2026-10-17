@@ -168,10 +168,64 @@ REASON_TEXT = {
 }
 
 
+def redact_url_for_external_ai(url: str) -> str:
+    """Return a conservative URL representation suitable for an external LLM."""
+    try:
+        parts = urlsplit(url)
+        plan = plan_url_lookup(url)
+        if plan["action"] == "skip":
+            return f"{parts.scheme}://{parts.hostname or ''}/[sensitive destination details omitted]"
+        # `trimmed` drops query and fragment; `full` is only a URL without those parts.
+        return str(plan.get("lookup_url") or f"{parts.scheme}://{parts.hostname or ''}/[destination omitted]")
+    except Exception:
+        return "[URL omitted by privacy policy]"
+
+
+_URL_TEXT_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+
+def sanitize_for_external_ai(value: Any) -> Any:
+    """Recursively sanitize email text and URL-shaped keys before LLM requests.
+
+    Original parsed evidence is preserved server-side and in the forensic report.
+    Only the context copied to the external model is transformed.
+    """
+    if isinstance(value, str):
+        def _sub(match):
+            raw = match.group(0)
+            trailing = ""
+            while raw and raw[-1] in set(".,;:!?)]}\\"):
+                trailing = raw[-1] + trailing
+                raw = raw[:-1]
+            return redact_url_for_external_ai(raw) + trailing
+        sanitized = _URL_TEXT_RE.sub(_sub, value)
+        # Defense in depth for metadata and JSON/.msg paths: parsers may not
+        # have applied all body PII masking to every header/field.
+        from email_parser.pii_masker import redact_sensitive_data
+        return redact_sensitive_data(sanitized)
+    if isinstance(value, list):
+        return [sanitize_for_external_ai(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_for_external_ai(item) for item in value]
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            safe_key = sanitize_for_external_ai(str(key))
+            if safe_key in result:
+                safe_key = f"{safe_key} [additional indicator]"
+            result[safe_key] = sanitize_for_external_ai(item)
+        return result
+    return value
+
+
 def _safe_display(url: str) -> str:
+    """Display only the origin for skipped sensitive URLs; paths can hold tokens."""
     try:
         p = urlsplit(url)
         host = p.hostname or ""
+        reasons = sensitive_url_reasons(url)
+        if reasons:
+            return f"{p.scheme}://{host}/[destination details omitted]"
         shown = f"{p.scheme}://{host}{p.path}"
         if len(shown) > 80:
             shown = shown[:79] + "…"
@@ -199,30 +253,100 @@ def build_privacy_report(
     urls = [u for u in (iocs or {}).get("urls") or [] if u]
 
     plans = [(u, plan_url_lookup(u)) for u in urls]
-    n_full = sum(1 for _, p in plans if p["action"] == "full")
-    n_trim = sum(1 for _, p in plans if p["action"] == "trimmed")
-    skipped = [
-        {"url": _safe_display(u), "reasons": p["reasons"],
-         "why": "; ".join(REASON_TEXT.get(r, r) for r in p["reasons"])}
-        for u, p in plans if p["action"] == "skip"
-    ]
+    url_results = (threat_intel or {}).get("url_reputation") or {}
+    n_full = n_trim = cached_full = cached_trim = 0
+    skipped = []
+    skipped_by_policy = []
+    missing_key_count = throttled_count = 0
+    for url, plan in plans:
+        result = url_results.get(url) if isinstance(url_results, dict) else None
+        result = result if isinstance(result, dict) else {}
+        status = str(result.get("status") or "").lower()
+        lookup_source = result.get("lookup_source")
+        if plan["action"] == "skip":
+            skipped.append({"url": _safe_display(url), "reasons": plan["reasons"],
+                            "why": "; ".join(REASON_TEXT.get(r, r) for r in plan["reasons"])})
+            continue
+        if status == "not_configured":
+            missing_key_count += 1
+            continue
+        if status in {"skipped_limit", "rate_limited_internal", "not_checked", "disabled"}:
+            skipped_by_policy.append({"url": _safe_display(url), "status": status})
+            if status == "rate_limited_internal":
+                throttled_count += 1
+            continue
+        if lookup_source == "cache":
+            if plan["action"] == "trimmed":
+                cached_trim += 1
+            else:
+                cached_full += 1
+            continue
+        # lookup_source=remote is set for successful and failed remote requests.
+        if lookup_source == "remote":
+            if plan["action"] == "trimmed":
+                n_trim += 1
+            else:
+                n_full += 1
     n_ips = len((iocs or {}).get("ips") or [])
     n_domains = len((iocs or {}).get("domains") or [])
     n_hashes = len((iocs or {}).get("hashes") or [])
 
-    def ext(provider_id, name, sends, count, notes=None, status=None):
+    def ext(provider_id, name, sends, lookups, notes=None):
+        entries = [v for v in (lookups or {}).values() if isinstance(v, dict)]
+        remote = sum(1 for value in entries if value.get("lookup_source") == "remote")
+        cached = sum(1 for value in entries if value.get("lookup_source") == "cache")
+        missing = sum(1 for value in entries if value.get("status") == "not_configured")
+        skipped_privacy = sum(1 for value in entries if value.get("status") == "skipped_privacy")
+        skipped_policy = sum(1 for value in entries if value.get("status") in {"skipped_limit", "skipped_non_public", "rate_limited_internal", "not_checked", "disabled"})
+        failed = sum(1 for value in entries if value.get("status") in {"timeout", "network_error", "provider_error", "invalid_response", "rate_limited", "unavailable"})
+        if not live:
+            state = "off"
+        elif not entries:
+            state = "nothing_to_send"
+        elif remote and (failed or missing or skipped_privacy or skipped_policy):
+            state = "partial"
+        elif remote:
+            state = "sent"
+        elif cached:
+            state = "cached"
+        elif missing:
+            state = "not_configured"
+        elif skipped_privacy and not skipped_policy:
+            state = "skipped_for_privacy"
+        elif skipped_policy:
+            state = "skipped_by_policy"
+        elif failed:
+            state = "unavailable"
+        else:
+            state = "nothing_to_send"
+        flow_notes = list(notes or [])
+        if remote or cached or failed or missing or skipped_privacy or skipped_policy:
+            flow_notes.append(
+                f"This analysis: {remote} outbound request(s), {cached} cached result(s), "
+                f"{failed} failed result(s), {missing} not configured, "
+                f"{skipped_privacy} privacy skip(s), {skipped_policy} policy/limit skip(s)."
+            )
         return {
-            "id": provider_id, "name": name,
-            "status": status or ("sent" if live and count else ("off" if not live else "nothing_to_send")),
-            "sends": sends, "count": count, "notes": notes or [],
+            "id": provider_id, "name": name, "status": state, "sends": sends,
+            # `count` is the number of remote requests for this analysis. Cached,
+            # failed, unconfigured, and skipped indicators are reported separately
+            # below so the privacy panel cannot imply a request was sent when it was not.
+            "count": remote, "counts": {"remote": remote, "cached": cached, "failed": failed,
+            "not_configured": missing, "skipped_for_privacy": skipped_privacy, "skipped_by_policy": skipped_policy},
+            "notes": flow_notes,
         }
 
     flows = [
         {
             "id": "local_parsing", "name": "E-TAP backend (parsing and analysis)",
             "status": "always",
-            "sends": ["the message you submitted (headers, body, attachments)"],
-            "notes": ["Everything below starts from this. Parsing and header, link and attachment checks run on the E-TAP server."],
+            "sends": ([
+                "a simplified message reconstructed from visible sender/subject/body text by the Gmail extension",
+                "not the original raw message, original authentication/routing headers, link targets or attachments",
+            ] if (provenance or {}).get("input_mode") == "quick_content_check" else [
+                "the uploaded .eml/.msg artifact, including available headers, body and attachments",
+            ]),
+            "notes": ["The browser sends the selected content to the E-TAP backend over HTTPS. Parsing and forensic checks run on the E-TAP server."],
         },
         {
             "id": "mongodb", "name": "E-TAP database (MongoDB)",
@@ -238,19 +362,25 @@ def build_privacy_report(
             "id": "gemini", "name": "Google Gemini (AI interpretation)",
             "status": ("sent" if gemini_used else ("skipped_by_triage" if skipped_by_triage else "off")),
             "sends": ["subject, sender, recipient and reply-to",
-                      "message body text and HTML (personal numbers and email addresses are masked when parsed from .eml)",
-                      "header, link and attachment findings",
-                      "the full URL list, including query strings",
-                      "text read from images by OCR"],
-            "notes": ["The URL sanitising below applies to VirusTotal lookups only. URLs sent to Gemini are not trimmed."],
+                      "message body text and HTML after parser masking plus an additional external-LLM PII-sanitization pass",
+                      "header, link and attachment findings after URL and common-PII sanitization",
+                      "sanitized URL representations; query strings/fragments are removed and secret-bearing destinations are reduced to their origin",
+                      "text read from images by OCR after common-PII sanitization"],
+            "notes": ["The external-LLM context is sanitized before the request; e-mail addresses and common PII patterns are masked, query/fragment values are removed, and secret-bearing destinations are reduced to their origin."],
         },
         ext("virustotal_urls", "VirusTotal (URLs)",
             ["scheme, host and path only when a query string is present; the full URL otherwise"],
-            n_full + n_trim,
+            url_results,
             notes=["VirusTotal may add queried URLs to a dataset shared with its community."]),
-        ext("virustotal_hashes", "VirusTotal (file hashes)", ["SHA-256 hash only; files are never uploaded"], n_hashes),
-        ext("abuseipdb", "AbuseIPDB (IP addresses)", ["public IP addresses found in headers and links"], n_ips),
-        ext("whois", "WHOIS (domains)", ["domain names found in the message"], n_domains),
+        ext("virustotal_hashes", "VirusTotal (file hashes)", ["SHA-256 hash only; files are never uploaded"],
+            (threat_intel or {}).get("hash_reputation") or {}),
+        ext("abuseipdb", "AbuseIPDB (IP addresses)", ["public IP addresses found in headers and links"],
+            (threat_intel or {}).get("ip_reputation") or {}),
+        ext("whois", "WHOIS (domains)", ["domain names found in the message"],
+            (threat_intel or {}).get("domain_info") or {}),
+        ext("ip_geolocation", "IP geolocation", ["public IP addresses; geographic estimates, not attribution"],
+            (threat_intel or {}).get("geo_lookup") or {},
+            notes=["Geolocation estimates a network address; it does not prove a person's location or attacker identity."]),
     ]
     return {
         "schema_version": 1,
@@ -259,15 +389,25 @@ def build_privacy_report(
         "flows": flows,
         "url_lookups": {
             "total_urls": len(urls),
+            # Actual requests made/reused during this analysis.
             "sent_in_full": n_full if live else 0,
             "sent_trimmed": n_trim if live else 0,
+            "cached_full": cached_full if live else 0,
+            "cached_trimmed": cached_trim if live else 0,
+            # Useful preview counts when live lookup is off. These are policy
+            # estimates only; they do not mean any request was made.
+            "would_send_in_full": sum(1 for _, plan in plans if plan["action"] == "full"),
+            "would_send_trimmed": sum(1 for _, plan in plans if plan["action"] == "trimmed"),
             "skipped_for_privacy": skipped,
-            "would_send_in_full": n_full, "would_send_trimmed": n_trim,
+            "skipped_by_policy": skipped_by_policy,
+            "not_sent_missing_key": missing_key_count,
+            "not_sent_internal_throttle": throttled_count,
             "note": ("Lookups are off, so nothing was sent." if not live else
-                     "Skipped links were not looked up. They are unknown, not clean."),
+                     "Remote requests, cached results and skipped lookups are distinguished below. Skipped indicators are unknown, not clean."),
         },
         "caveats": [
-            "Hosted analysis is not local processing: the message is sent to the E-TAP backend and, "
-            "when AI interpretation is on, to Google Gemini.",
+            "Hosted analysis is not local processing: submitted content is sent to the E-TAP backend.",
+            "When Gemini interpretation runs, a sanitized, reduced copy of email-derived context is sent to Google Gemini. Sanitization is heuristic and cannot guarantee removal of every sensitive value.",
+            "Full extracted URLs/IOCs may be stored in MongoDB for correlation even when query-bearing URLs are trimmed or skipped for external VirusTotal lookups.",
         ],
     }

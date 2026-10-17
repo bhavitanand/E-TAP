@@ -9,7 +9,7 @@ This guide documents the current web deployment. The React/Vite frontend and Fas
 - **Backend health:** <https://etap-backend-od1c.onrender.com/health>
 - **API docs:** <https://etap-backend-od1c.onrender.com/docs>
 
-The backend's bare `/` route currently returns a FastAPI `404 Not Found`; use `/health` to check HTTP availability. The health route does not independently verify MongoDB connectivity, so also inspect Render startup logs.
+The backend root `/` returns a small service index. `GET /health` is a liveness probe only; `GET /ready` makes a database ping and returns HTTP 503 if the database is unavailable. Use `/ready` to check application readiness and inspect Render logs when it fails.
 
 ## Architecture
 
@@ -55,6 +55,8 @@ AUTO_FALLBACK_DB=0
 THREAT_INTEL_LIVE=1
 GEMINI_API_KEY=<private key>
 GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_REQUEST_TIMEOUT_MS=8000
+THREAT_INTEL_MAX_LOOKUPS_PER_PROVIDER=2
 VIRUSTOTAL_API_KEY=<private key>
 ABUSEIPDB_API_KEY=<private key>
 ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173,https://e-tap-lac.vercel.app
@@ -79,7 +81,7 @@ Add this Vercel environment variable for Production (and Preview only if needed)
 VITE_API_BASE_URL=https://etap-backend-od1c.onrender.com
 ```
 
-The frontend API client reads `import.meta.env.VITE_API_BASE_URL`. Do not place API keys or the MongoDB URI in Vercel; `VITE_` variables are embedded in client-side frontend code. Redeploy the frontend after changing the variable so the value is included in the new build.
+The frontend API client reads `import.meta.env.VITE_API_BASE_URL`. Set it on Vercel to `https://etap-backend-od1c.onrender.com` (without `/health` and without a trailing slash). Do not place API keys or the MongoDB URI in Vercel; `VITE_` variables are embedded in client-side frontend code. Redeploy the frontend after changing the variable so the value is included in the new build.
 
 ## 4. CORS after deploying the frontend
 
@@ -93,12 +95,7 @@ If Vercel assigns a different production domain, use that exact hostname instead
 
 ## 5. Extension deployment is separate
 
-The hosted web application does not automatically reconfigure the unpacked Gmail extension. Its current source defaults to localhost:
-
-- `extension/background.js`: API base URL.
-- `extension/content.js`: dashboard/report link base URL.
-
-For the current hosted deployment, change those constants to the Render and Vercel URLs respectively, verify `extension/manifest.json` host permissions, and reload the unpacked extension from the browser's extension manager. The extension is experimental and reconstructs a simplified message from visible Gmail DOM content; it is not raw-message forensics or Gmail OAuth integration.
+The extension is distributed separately from the hosted web application. The committed source already targets the current hosted URLs: `extension/background.js` calls the Render API and `extension/content.js` links to the Vercel dashboard. If testing locally, change those constants to localhost and reload the unpacked extension. Confirm that `extension/manifest.json` host permissions allow the selected hosts. The extension is experimental and reconstructs a simplified message from visible Gmail DOM content; it is not raw-message forensics or Gmail OAuth integration.
 
 ## 6. Production safety checklist
 
@@ -106,7 +103,7 @@ For the current hosted deployment, change those constants to the Render and Verc
 - Rotate any credentials that were ever exposed in chat, logs, screenshots, commits or public repository history.
 - Use least-privilege database credentials and narrow Atlas network access where feasible.
 - Understand that live threat intelligence and Gemini may receive indicators or email-derived content.
-- Monitor Render logs and provider quotas. Free instances can spin down and have constrained CPU/RAM.
-- Treat automated scores as triage, not proof. Test with both benign and suspicious artifacts.
+- Monitor Render logs and provider quotas. Free instances can spin down and have constrained CPU/RAM. Each provider lookup has a bounded timeout; `GEMINI_REQUEST_TIMEOUT_MS` defaults to 8000 ms (clamped 1000–60000), and `THREAT_INTEL_MAX_LOOKUPS_PER_PROVIDER` defaults to 2 (clamped 1–20).
+- Treat automated scores as triage, not proof. Test with both benign and suspicious artifacts. Provider coverage in each report distinguishes success, fallback, timeout, rate limits, configuration gaps and intentional policy/privacy skips; unavailable/skipped never means clean.
 - The browser History view uses `localStorage`; it is not a server-wide history listing endpoint. The backend does expose `GET /investigations/{email_id}` for retrieving an individual stored investigation.
 - Do not describe E-TAP as fully local-only, a guaranteed detector, or a full Gmail replacement.

@@ -50,7 +50,7 @@ def test_vt_network_failure_is_not_cached_and_does_not_leak_url():
     boom = requests.ConnectionError(f"HTTPSConnectionPool ... /urls/{vt_lookup._url_to_vt_id(secret_url)}")
     with patch("threat_intel.vt_lookup.requests.get", side_effect=[boom, _ok_response()]) as get:
         first = vt_lookup.check_url_reputation(secret_url)
-        assert first["malicious"] is None and first["status"] == "error"
+        assert first["malicious"] is None and first["status"] == "network_error"
         assert "account/orders" not in first["error"]
         assert vt_lookup._url_to_vt_id(secret_url) not in first["error"]
         vt_lookup.check_url_reputation(secret_url)
@@ -76,7 +76,8 @@ def test_vt_missing_key_is_unknown_not_clean():
     _reset_vt()
     os.environ.pop("VIRUSTOTAL_API_KEY", None)
     r = vt_lookup.check_url_reputation("http://example.test/")
-    assert r["malicious"] is None and "error" in r
+    assert r["malicious"] is None and r["status"] == "not_configured"
+    assert "error" in r
 
 
 def test_abuseipdb_failure_not_cached():

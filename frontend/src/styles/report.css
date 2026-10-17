@@ -345,3 +345,39 @@
   .evidence-narrative details > summary { font-weight: 600; }
   .ev-row, .ev-reason { background: #FFFFFF !important; border-color: #CCCCCC !important; }
 }
+
+/* B11: explicit provider status and partial-analysis coverage */
+.provider-status-panel,
+.privacy-data-panel { margin-top: 14px; }
+.provider-status-summary { margin: 0 0 12px; color: var(--text-primary); font-size: var(--fs-sm); font-weight: 600; }
+.provider-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.provider-status-row { min-width: 0; padding: 11px 12px; border: 1px solid var(--border-hairline); border-radius: var(--radius-xs); background: var(--bg-base); }
+.provider-status-row-head { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.provider-status-row-head strong { color: var(--text-primary); font-size: var(--fs-sm); }
+.provider-status-row p { color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.45; margin: 7px 0 0; }
+.provider-status-badge { display: inline-flex; align-items: center; border: 1px solid var(--border-hairline); border-radius: 999px; padding: 2px 8px; font-size: var(--fs-micro); font-weight: 700; white-space: nowrap; }
+.provider-status-ok { color: var(--verdict-safe); background: rgba(76,175,125,.10); border-color: rgba(76,175,125,.38); }
+.provider-status-caution { color: var(--accent-amber); background: rgba(232,162,61,.10); border-color: rgba(232,162,61,.38); }
+.provider-status-danger { color: var(--verdict-danger); background: rgba(217,83,79,.10); border-color: rgba(217,83,79,.38); }
+.provider-status-neutral { color: var(--text-muted); background: var(--bg-surface-subtle); }
+.provider-status-meta, .provider-status-footnote, .provider-status-muted { margin-top: 7px; color: var(--text-muted); font-size: var(--fs-micro); line-height: 1.5; }
+.provider-status-meta code { overflow-wrap: anywhere; }
+.provider-status-footnote { margin-bottom: 0; }
+
+/* B10: display the actual analysis data flows rather than only returning JSON. */
+.privacy-url-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.privacy-url-summary > div { padding: 10px; border: 1px solid var(--border-hairline); border-radius: var(--radius-xs); background: var(--bg-base); }
+.privacy-url-summary span { display: block; color: var(--text-muted); font-size: var(--fs-micro); }
+.privacy-url-summary strong { display: block; margin-top: 4px; color: var(--text-primary); font-size: var(--fs-md); }
+.privacy-flow-note { color: var(--text-secondary); font-size: var(--fs-xs); margin: 8px 0 12px; }
+.privacy-flow-list { display: flex; flex-direction: column; gap: 7px; }
+.privacy-flow-card { border: 1px solid var(--border-hairline); background: var(--bg-base); border-radius: var(--radius-xs); padding: 10px 12px; }
+.privacy-flow-card > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.privacy-flow-name { color: var(--text-primary); font-size: var(--fs-sm); font-weight: 600; }
+.privacy-flow-status { color: var(--text-muted); font-size: var(--fs-micro); }
+.privacy-flow-section { margin-top: 9px; color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.5; }
+.privacy-flow-section ul, .privacy-caveats { padding-left: 18px; margin: 5px 0 0; }
+.privacy-skipped-list { padding-left: 18px; margin: 10px 0 0; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-xs); }
+.privacy-skipped-list li { color: var(--text-secondary); }
+.privacy-skipped-list code { display: block; color: var(--text-primary); overflow-wrap: anywhere; margin-bottom: 3px; }
+.privacy-caveats { margin-top: 12px; color: var(--text-muted); font-size: var(--fs-micro); line-height: 1.5; }

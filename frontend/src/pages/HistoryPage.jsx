@@ -57,9 +57,8 @@ export function HistoryPage({ onSelectDossier }) {
           [NOTICE]
         </span>
         <span>
-          Backend triage records currently cached client-side. Backend owner requested to expose{' '}
-          <code className="mono-val" style={{ color: 'var(--accent-amber)' }}>GET /investigations</code> &{' '}
-          <code className="mono-val" style={{ color: 'var(--accent-amber)' }}>GET /investigations/{'{id}'}</code> for shared server-side persistence.
+          This list is a browser-local convenience history; it is not a shared server-side investigations feed. Individual stored dossiers can be fetched by ID via{' '}
+          <code className="mono-val" style={{ color: 'var(--accent-amber)' }}>GET /investigations/{'{id}'}</code>. Clearing this list does not delete server-side analysis records.
         </span>
       </div>
 

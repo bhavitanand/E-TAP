@@ -87,7 +87,11 @@ def test_privacy_report_matches_policy_and_mode():
     flows = {f["id"]: f for f in off["flows"]}
     assert flows["gemini"]["status"] == "off" and flows["virustotal_urls"]["status"] == "off"
 
-    live = privacy.build_privacy_report(email={}, iocs=iocs, threat_intel={},
+    live = privacy.build_privacy_report(email={}, iocs=iocs, threat_intel={"url_reputation": {
+                                            "https://a.com/x": {"status": "available", "lookup_source": "remote", "malicious": False},
+                                            "https://a.com/y?p=1": {"status": "available", "lookup_source": "remote", "malicious": False},
+                                            "https://b.com/v?token=zz": {"status": "skipped_privacy", "malicious": None},
+                                        }},
                                         provenance={"threat_intel_mode": "live",
                                                     "assessment_provider": "gemini"})
     flows = {f["id"]: f for f in live["flows"]}

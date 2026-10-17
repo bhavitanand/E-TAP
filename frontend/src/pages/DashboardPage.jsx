@@ -13,6 +13,8 @@ import MitreCards from '../components/report/MitreCards';
 import EvidenceBreakdown from '../components/report/EvidenceBreakdown';
 import HistoricalCorrelationCard from '../components/report/HistoricalCorrelationCard';
 import ExportButton from '../components/report/ExportButton';
+import ProviderStatusPanel from '../components/report/ProviderStatusPanel';
+import PrivacyDataPanel from '../components/report/PrivacyDataPanel';
 
 export function DashboardPage() {
   const { data, activeFile, resetInvestigation } = useInvestigation();
@@ -256,6 +258,12 @@ export function DashboardPage() {
 
           {/* What we observed / Why it matters / What to do */}
           <EvidenceNarrative report={data.evidence_report} />
+
+          {/* B11: provider availability is separate from the threat verdict. */}
+          <ProviderStatusPanel status={data.provider_status} />
+
+          {/* B10: make actual processing/storage/external-enrichment flows visible. */}
+          <PrivacyDataPanel report={data.privacy_report} />
 
           {/* Core Envelope Header Metadata Card */}
           <div className="forensic-panel">

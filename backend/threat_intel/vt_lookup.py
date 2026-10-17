@@ -75,51 +75,56 @@ def _unavailable(reason: str, status: str = "error") -> dict:
 def _vt_lookup(cache_key: str, path: str) -> dict:
     cached = _vt_cache.get(cache_key)
     if cached is not None:
-        return cached
+        # Report cache reuse separately from a request made during this analysis.
+        return dict(cached, lookup_source="cache")
 
     if not _get_vt_key():
         return _unavailable("VIRUSTOTAL_API_KEY not set", status="not_configured")
 
     # Internal throttle: protect the 4 req/min free-tier quota
     if not _vt_limiter.can_request():
-        return _unavailable(
+        return dict(_unavailable(
             "VirusTotal free-tier quota (4 req/min) active — remote query throttled to prevent API lockout",
             status="rate_limited_internal",
-        )
+        ), lookup_source="internal_rate_limit")
 
     try:
         _vt_limiter.record_request()
         response = requests.get(
             f"{VT_BASE_URL}/{path}",
             headers=_vt_headers(),
-            timeout=10,
+            timeout=(2, 4)
         )
 
         if response.status_code == 429:
-            return _unavailable(
+            return dict(_unavailable(
                 "VirusTotal rate limit hit (4/min, 500/day on free tier)",
                 status="rate_limited",
-            )
+            ), lookup_source="remote")
 
         if response.status_code == 404:
             # Not previously seen by VT -- not necessarily benign, just unknown.
             # Submitting it for a fresh scan costs another quota unit, so we
             # report "unknown" rather than auto-submitting. This IS a
             # definitive answer, so it is cached.
-            result = {"malicious": None, "status": "not previously scanned by VirusTotal"}
+            result = {"malicious": None, "status": "not_found", "message": "Not previously scanned by VirusTotal", "lookup_source": "remote"}
             _vt_cache.set(cache_key, result)
             return result
 
         response.raise_for_status()
         stats = response.json()["data"]["attributes"]["last_analysis_stats"]
-    except (requests.RequestException, KeyError, TypeError, ValueError) as exc:
-        # Do not echo the exception text: requests errors embed the full
-        # request URL, which for url lookups contains the base64 of the
-        # (possibly sensitive) link being checked.
-        return _unavailable(f"VirusTotal request failed ({type(exc).__name__})")
+    except requests.Timeout:
+        return dict(_unavailable("VirusTotal request timed out", status="timeout"), lookup_source="remote")
+    except requests.RequestException as exc:
+        # Do not echo the exception text: it may contain the encoded URL.
+        return dict(_unavailable(f"VirusTotal request failed ({type(exc).__name__})", status="network_error"), lookup_source="remote")
+    except (KeyError, TypeError, ValueError):
+        return dict(_unavailable("VirusTotal returned an invalid response", status="invalid_response"), lookup_source="remote")
 
     malicious_count = stats.get("malicious", 0) + stats.get("suspicious", 0)
     result = {
+        "status": "available",
+        "lookup_source": "remote",
         "malicious": malicious_count > 0,
         "malicious_engine_count": malicious_count,
         "total_engines": sum(stats.values()),

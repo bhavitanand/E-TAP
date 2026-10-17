@@ -6,7 +6,7 @@ This module provides a fast XGBoost metadata triage layer plus Gemini-assisted c
 
 1. The legacy content classifier in `main.py` can classify message content against the configured taxonomy.
 2. `triage_model.py` predicts from six metadata features: attachment presence, URL count, sender-domain age when available, SPF result, subject length, and selected urgency indicators.
-3. `stage_g.py` uses the complete evidence context—email content, headers, attachments, IOCs, threat intelligence and correlation—to produce the final interpretation when Gemini is invoked.
+3. `stage_g.py` uses the evidence context—email content, headers, attachments, IOCs, threat intelligence and correlation—to produce the final interpretation when Gemini is invoked. Before a Gemini request, the pipeline sends a privacy-reduced copy with URL query/fragment details sanitized; the stored forensic evidence remains separate.
 4. The pipeline skips Gemini only when the triage model is available, predicts benign at or above `TRIAGE_SAFE_THRESHOLD` (default `0.90`), and no heuristic override forces Stage G. Selected risky keywords and extracted URLs force Stage G.
 
 The bundled XGBoost pickle should be treated as an initial triage aid, not a production-calibrated detection model. Validate false positives and false negatives against representative mail before relying on it for operational decisions. If the model is missing or cannot load, the pipeline fails open to the normal analysis path.
@@ -40,7 +40,7 @@ GEMINI_API_KEY=your-own-key-here
 GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-The model setting must be a model identifier available to the configured API key; adjust it if the provider changes availability. Never commit `.env` or hard-code real credentials. If no Gemini key is configured, Stage G returns an explicit offline fallback result so the analysis pipeline can still return a report.
+The model setting must be a model identifier available to the configured API key; adjust it if the provider changes availability. Never commit `.env` or hard-code real credentials. If no Gemini key is configured or configured model calls fail, Stage G returns an explicit offline fallback result so the analysis pipeline can still return a report. B11 records provider/fallback state separately from the email verdict. The fallback is not equivalent to a live model assessment.
 
 ## Output shape
 

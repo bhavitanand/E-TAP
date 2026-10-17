@@ -48,6 +48,8 @@ VIRUSTOTAL_API_KEY=
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.5-flash-lite
 ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+GEMINI_REQUEST_TIMEOUT_MS=8000
+THREAT_INTEL_MAX_LOOKUPS_PER_PROVIDER=2
 PORT=5000
 ```
 
@@ -63,7 +65,7 @@ cd backend
 python -m uvicorn app:app --reload --host 127.0.0.1 --port 5000
 ```
 
-API: <http://127.0.0.1:5000>. Health: <http://127.0.0.1:5000/health>. Interactive docs: <http://127.0.0.1:5000/docs>.
+API index: <http://127.0.0.1:5000/>. Liveness: <http://127.0.0.1:5000/health>. Database readiness: <http://127.0.0.1:5000/ready>. Interactive docs: <http://127.0.0.1:5000/docs>.
 
 ## API endpoints
 
@@ -87,7 +89,7 @@ Fetches an individual persisted investigation. This is not a list endpoint; the 
 
 ### `GET /health`
 
-Returns `{"status":"ok"}` if the API responds. It does not perform a database health check.
+Returns `{"status":"ok","check":"liveness"}` if the API responds. It does not perform a database health check. Use `GET /ready` for a database ping; that endpoint returns HTTP 503 if the database is unavailable.
 
 ## CLI
 
@@ -108,3 +110,9 @@ python tests/test_pipeline_offline.py
 ## RAG behavior and limitations
 
 Historical search uses cosine similarity over MongoDB investigation summaries by default. `sentence-transformers` is optional and is not part of `requirements.txt`; on Render, the code intentionally uses a deterministic hash-based 384-dimensional fallback embedder to reduce memory usage. This supports a runnable demo but is not equivalent to a trained semantic embedding model. Atlas Vector Search is optional and requires a matching index configured before `USE_ATLAS_VECTOR_SEARCH=1` is enabled.
+
+## Health endpoints
+
+- `GET /` returns service metadata.
+- `GET /health` is liveness only and does not prove database connectivity.
+- `GET /ready` pings the configured database and returns HTTP 503 when it is unavailable.

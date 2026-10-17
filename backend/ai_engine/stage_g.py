@@ -113,13 +113,54 @@ def _offline_content_classification(email: dict) -> dict:
     indicators: list[str] = []
     reasons: list[str] = []
 
-    if _has_any(lowered, ["password", "login", "credential", "verify your account", "sign in"]):
+    if not any(str(email.get(k) or "").strip() for k in ("subject", "body_text", "body_html")):
+        return {
+            "content_verdict": "Suspicious",
+            "verdict": "Suspicious",
+            "content_risk_score": 50,
+            "confidence": 0.10,
+            "attack_type": "Input incomplete",
+            "categories": [_category("Suspicious / Uncategorized")],
+            "reasons": ["No subject or readable body was available; content could not be assessed reliably."],
+            "suspicious_indicators": [],
+            "provider": "offline_fallback",
+            "analysis_available": False,
+            "status": "input_incomplete; deterministic fallback did not treat missing content as safe",
+        }
+
+    has_url = bool(re.search(r"https?://", lowered))
+    has_link_lure = _has_any(lowered, [
+        "click here", "click below", "open the link", "visit the link",
+        "follow this link", "use this link", "click the link",
+    ])
+    has_urgency = _has_any(lowered, [
+        "urgent", "immediately", "within 24 hours", "final warning",
+        "account suspended", "account will be suspended", "act now",
+        "expires today", "limited time", "locked immediately",
+    ])
+    has_sensitive_context = _has_any(lowered, [
+        "verify", "login", "password", "account", "payment", "invoice",
+        "credentials", "mfa", "one-time code", "bank details",
+    ])
+    credential_topic = _has_any(lowered, ["password", "login", "credential", "sign in", "account access", "mfa", "verification code"])
+    credential_action = _has_any(lowered, [
+        "verify your account", "confirm your account", "reset your password",
+        "change your password", "update your password", "enter your password",
+        "confirm your password", "validate your login", "unlock your account",
+        "account is locked", "account has been suspended", "sign in to",
+        "log in to", "re-enter your credentials", "verify your identity",
+    ])
+    strong_link_lure = has_url and has_link_lure and has_sensitive_context and (has_urgency or credential_action)
+
+    # A passing mention of a password or URL is common in benign mail. Require
+    # an action/pressure context before assigning the credential-phishing class.
+    if credential_topic and (credential_action or (has_link_lure and has_urgency)):
         categories.append(_category("Credential Phishing"))
-        indicators.append("credential or login language")
-    if _has_any(lowered, ["click here", "open the link", "visit http", "http://", "https://"]):
+        indicators.append("credential-related request combined with an action or pressure cue")
+    if has_url and has_link_lure and has_sensitive_context:
         categories.append(_category("Malicious Link / URL"))
-        indicators.append("link-based call to action")
-    if _has_any(lowered, ["urgent", "immediately", "within 24 hours", "final warning", "suspended"]):
+        indicators.append("link call-to-action combined with a sensitive or urgent request")
+    if has_urgency:
         categories.append(_category("Social Engineering"))
         indicators.append("urgency or pressure language")
     if _has_any(lowered, ["invoice", "payment", "wire transfer", "bank account", "remittance"]):
@@ -137,12 +178,10 @@ def _offline_content_classification(email: dict) -> dict:
         indicators.append("commercial or unsolicited language")
 
     if categories:
-        verdict = "Suspicious"
-        if any(c["weight"] >= 85 for c in categories):
-            verdict = "Likely Malicious"
+        verdict = "Likely Malicious" if strong_link_lure else "Suspicious"
         reasons = [f"Detected {indicator} in the email content." for indicator in indicators]
         attack_type = categories[0]["name"]
-        confidence = 0.62
+        confidence = 0.62 if strong_link_lure else 0.42
     else:
         categories = [_category("Other")]
         verdict = "Likely Legitimate"
@@ -298,6 +337,11 @@ def _offline_final_assessment(context: dict, content: dict) -> dict:
     content_score = int(content.get("content_risk_score") or 0)
     content_confidence = float(content.get("confidence") or 0.5)
     score = int(content_score * max(content_confidence, 0.35))
+    input_incomplete = content.get("analysis_available") is False
+    if input_incomplete:
+        # Missing/unreadable content is a coverage problem, never a clean result.
+        score = max(score, 40)
+        supporting_evidence.append("Content assessment incomplete: no readable subject/body was available.")
     if content_score >= 85 and content_confidence >= 0.55:
         score = max(score, 55)
     evidence_assessments.append({
@@ -405,10 +449,13 @@ def _offline_final_assessment(context: dict, content: dict) -> dict:
         "evidence_assessments": evidence_assessments,
         "supporting_evidence": supporting_evidence,
         "mitre_attack": mitre,
-        "recommended_actions": [
+        "recommended_actions": ([
+            "Re-export or re-upload the original email so its subject/body can be parsed; treat this result as incomplete.",
+            "Do not assume the message is safe because the content could not be assessed.",
+        ] if input_incomplete else ([
             "Review extracted URLs and attachments before user release.",
             "Confirm external reputation with live API keys before production decisions.",
-        ] if score >= 40 else ["No immediate action required beyond normal monitoring."],
+        ] if score >= 40 else ["No immediate action required beyond normal monitoring."])) ,
         "provider": "offline_fallback",
         "status": "GEMINI_API_KEY not configured; used deterministic final-assessment fallback",
         "email_subject": email.get("subject"),

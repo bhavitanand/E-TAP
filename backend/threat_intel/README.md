@@ -17,6 +17,7 @@ Private, loopback and reserved IP addresses are skipped for external IP reputati
 
 ```dotenv
 THREAT_INTEL_LIVE=0
+THREAT_INTEL_MAX_LOOKUPS_PER_PROVIDER=2
 ABUSEIPDB_API_KEY=
 VIRUSTOTAL_API_KEY=
 ```
@@ -35,6 +36,8 @@ The stage produces structured results including lookup mode, IP reputation, doma
 - Short-lived in-memory caches reduce duplicate requests during a running backend process; cache contents do not survive a process restart.
 
 Provider quotas and terms change; consult each provider's current plan before running repeated live tests. VirusTotal requests are throttled in-process by this implementation, but a process-local limiter is not a distributed quota controller across multiple backend instances.
+
+B11 adds a normalized per-provider status summary in the analysis report. A timeout, quota limit, missing key, disabled provider, no-record response and privacy/policy skip are distinct states. Missing or skipped lookup results remain unknown and must not be displayed as benign. `THREAT_INTEL_MAX_LOOKUPS_PER_PROVIDER` is clamped to 1–20 and defaults to 2; VirusTotal URL and hash queries share its per-analysis budget. Provider availability is separate from the threat verdict.
 
 ## Modules and tests
 

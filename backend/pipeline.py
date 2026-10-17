@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from datetime import date, datetime
 from typing import Any
 
@@ -19,13 +20,14 @@ from forensics.attachment_forensics import analyze_attachments
 from forensics.ioc_extraction import extract_iocs
 from forensics.link_analysis import analyze_links
 from forensics.qr_trace import build_qr_trace
-from privacy import build_privacy_report
+from privacy import build_privacy_report, sanitize_for_external_ai
 from threat_intel import enrich_iocs
 from correlation import correlate_and_store
 from db import connection, repository
 from ai_engine.stage_g import analyze_with_stage_g
 from verdicts import finalize_verdict, LIKELY_LEGITIMATE
 from evidence import build_evidence_ledger, build_evidence_report, compact_ledger
+from provider_status import build_provider_status
 
 logger = logging.getLogger("E-TAP.pipeline")
 
@@ -57,12 +59,18 @@ def _short_reason(exc_text: Any, limit: int = 160) -> str | None:
 
 
 def _count_unavailable_lookups(threat_intel: dict) -> tuple[int, int]:
-    """(lookups attempted, lookups that returned no usable answer) for live TI."""
+    """Count attempted IOC lookups and true failures, excluding intentional skips."""
     total = failed = 0
-    for section in ("ip_reputation", "domain_info", "url_reputation", "hash_reputation"):
+    ignored = {"skipped_privacy", "skipped_limit", "skipped_non_public", "private_or_reserved", "not_checked", "skipped_by_policy", "disabled"}
+    for section in ("ip_reputation", "domain_info", "url_reputation", "hash_reputation", "geo_lookup"):
         for info in (threat_intel.get(section) or {}).values():
+            if not isinstance(info, dict):
+                continue
+            status = str(info.get("status") or "").lower()
+            if status in ignored:
+                continue
             total += 1
-            if isinstance(info, dict) and info.get("error"):
+            if info.get("error") or status in {"timeout", "network_error", "provider_error", "invalid_response", "not_configured", "rate_limited", "rate_limited_internal", "unavailable"}:
                 failed += 1
     return total, failed
 
@@ -104,6 +112,7 @@ def _build_email_summary(data: dict) -> dict:
 
 
 def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
+    started_at = time.perf_counter()
     db = connection.get_db()
     data = parsed_email.to_dict()
     source = source if source in VALID_SOURCES else SOURCE_FULL_MESSAGE
@@ -298,7 +307,9 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
             "mitre_attack": [],
         }
     else:
-        ai_analysis = analyze_with_stage_g(context)
+        # B10: external Gemini receives a privacy-reduced copy. The original
+        # context remains intact for the E-TAP report and IOC correlation.
+        ai_analysis = analyze_with_stage_g(sanitize_for_external_ai(context))
         final_assessment = ai_analysis.get("final_assessment") or {}
 
     # One place decides the label, the score band and what clients should show.
@@ -309,10 +320,20 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
 
     ti_total, ti_failed = _count_unavailable_lookups(threat_intel_analysis) if threat_intel_live else (0, 0)
     provider = final_assessment.get("provider") or "unknown"
-    fallback_reason = _short_reason(final_assessment.get("fallback_reason"))
-    if provider == "offline_fallback" and not fallback_reason:
-        # e.g. GEMINI_API_KEY not configured -- say why instead of a bare "fallback"
-        fallback_reason = _short_reason(final_assessment.get("status"))
+    # Never send raw Google SDK exceptions to the browser; they may include
+    # request details. ProviderStatus below carries the stable user-facing state.
+    raw_fallback_reason = str(final_assessment.get("fallback_reason") or "").lower()
+    if provider == "offline_fallback":
+        if not os.getenv("GEMINI_API_KEY"):
+            fallback_reason = "Gemini is not configured; the deterministic fallback was used."
+        elif "timeout" in raw_fallback_reason or "deadline" in raw_fallback_reason:
+            fallback_reason = "Gemini timed out; the deterministic fallback was used."
+        elif "429" in raw_fallback_reason or "quota" in raw_fallback_reason or "rate limit" in raw_fallback_reason:
+            fallback_reason = "Gemini rate or quota limits prevented analysis; the deterministic fallback was used."
+        else:
+            fallback_reason = "Gemini model attempts failed; the deterministic fallback was used."
+    else:
+        fallback_reason = None
     analysis_provenance = {
         "input_mode": source,
         "headers_available": not quick_check,
@@ -327,7 +348,16 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         "verdict_reconciled": decision["reconciled"],
         "verdict_original": decision["original_label"],
     }
-    # Never ship the raw exception text to clients; the scrubbed copy lives in provenance.
+    provider_status = build_provider_status(
+        threat_intel=threat_intel_analysis,
+        iocs=ioc_analysis,
+        threat_intel_live=threat_intel_live,
+        final_assessment=final_assessment,
+        gemini_skipped=gemini_skipped,
+    )
+    analysis_provenance["provider_status_summary"] = provider_status["summary"]
+    analysis_provenance["provider_coverage_status"] = provider_status["coverage_status"]
+    # Never ship the raw exception text to clients; only stable provider states.
     final_assessment.pop("fallback_reason", None)
     (ai_analysis.get("content_classification") or {}).pop("fallback_reason", None)
 
@@ -358,6 +388,9 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         threat_intel=threat_intel_analysis,
         provenance=analysis_provenance,
     )
+    analysis_duration_ms = round((time.perf_counter() - started_at) * 1000)
+    analysis_provenance["analysis_duration_ms"] = analysis_duration_ms
+    provider_status["analysis_duration_ms"] = analysis_duration_ms
 
     stage_status = {
         "A": "complete",
@@ -383,6 +416,7 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
             "link_analysis": link_analysis,
             "qr_trace": qr_trace,
             "privacy_report": privacy_report,
+            "provider_status": provider_status,
             "content_analysis": ai_analysis.get("content_classification"),
             "final_assessment": final_assessment,
             "mitre_attack": ai_analysis.get("mitre_attack", []),
@@ -408,6 +442,7 @@ def _run_parsed_pipeline(parsed_email, source: str | None = None) -> dict:
         "link_analysis": link_analysis,
         "qr_trace": qr_trace,
         "privacy_report": privacy_report,
+        "provider_status": provider_status,
         "email": context["email"],
         "headers": header_analysis,
         "attachments": attachment_analysis.get("attachments", []),

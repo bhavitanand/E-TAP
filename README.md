@@ -12,7 +12,9 @@ These are the team's current demo deployments. Update this section if the servic
 - **Backend health endpoint:** <https://etap-backend-od1c.onrender.com/health>
 - **Interactive API documentation:** <https://etap-backend-od1c.onrender.com/docs>
 
-The backend API does not define a homepage route, so opening the backend's bare URL may return `{"detail":"Not Found"}`. Use `/health` or `/docs` to check the service.
+The backend root `/` returns a small service index. `GET /health` is a liveness check only; `GET /ready` also checks database connectivity and returns HTTP 503 when the database is not ready. Use `/docs` for interactive API documentation.
+
+> **Public-demo safety:** this deployment is a student demo, not a multi-user production service. The reviewed `/chat` and `/investigations/{email_id}` routes do not yet provide full per-user authentication and authorization, and historical RAG uses shared stored records. Use synthetic/non-sensitive test emails only until access isolation and retention controls are implemented. CORS and rate limits are not authentication.
 
 ## Capabilities
 
@@ -45,11 +47,12 @@ FastAPI backend (backend/app.py)
 
 - `frontend/` — React/Vite dashboard and report views.
 - `backend/` — FastAPI API, pipeline, forensic modules, database, threat-intelligence integrations and RAG assistant.
-- `extension/` — experimental Manifest V3 Gmail overlay. Its source currently defaults to localhost URLs; see the extension section below before using it with the hosted deployment.
+- `extension/` — experimental Manifest V3 Gmail overlay. Its committed source targets the current hosted demo URLs; see the extension section below for switching to local development.
 - `samples/` — dataset manifests and sample-corpus notes. The raw `.eml`/`.msg` files referenced in the manifests are not committed.
 - `DEPLOYMENT.md` — current Render/Vercel/Atlas deployment guide.
 - `SETUP.md` — local development setup.
-- `work.md` — current project status and follow-up work.
+- `WORKFLOW-B-README.md` — the single consolidated record for Workflow B, including B0–B11 behavior, tests, limitations and the pre-Workflow-C gate.
+- `work.md` — current project status and next actions (not a per-stage changelog).
 
 ## Run locally (Windows PowerShell)
 
@@ -108,7 +111,9 @@ Live lookups may send IOCs or derived indicators to third-party services. Gemini
 
 ## Main API endpoints
 
-- `GET /health` — returns `{"status":"ok"}`; this endpoint does not verify MongoDB health by itself.
+- `GET /` — small service index with links to health, readiness and docs.
+- `GET /health` — liveness only; confirms the HTTP process can respond, not that MongoDB is reachable.
+- `GET /ready` — readiness check with a database ping; returns HTTP 503 when the configured database is unavailable.
 - `POST /analyze` — multipart upload with a `file` field containing an `.eml` or `.msg`; the backend enforces a 25 MB limit and rate-limits this endpoint.
 - `POST /chat` — SOC Assistant request containing `question`, with optional `email_id` and `email_context` for active-report context.
 - `GET /investigations/{email_id}` — fetch one stored investigation by its database ID/email ID.
@@ -125,7 +130,7 @@ To load it locally in Chrome or Brave:
 3. Choose **Load unpacked** and select the repository's `extension/` folder.
 4. Open the dedicated test mailbox and monitor the extension console and backend logs.
 
-The extension currently defaults to `http://127.0.0.1:5000` for the API and `http://127.0.0.1:5173` for the dashboard. To point it at the hosted service, update `ETAP_API_BASE_URL` in `extension/background.js` to `https://etap-backend-od1c.onrender.com` and `ETAP_APP_BASE_URL` in `extension/content.js` to `https://e-tap-lac.vercel.app`, verify the host permissions in `extension/manifest.json`, and reload the unpacked extension. The code change is separate from deploying the website.
+The committed extension targets the current hosted demo: `https://etap-backend-od1c.onrender.com` for the API and `https://e-tap-lac.vercel.app` for the dashboard. For local development, change `ETAP_API_BASE_URL` in `extension/background.js` to `http://127.0.0.1:5000` and `ETAP_APP_BASE_URL` in `extension/content.js` to `http://127.0.0.1:5173`, then reload the unpacked extension. Extension code changes are separate from website deployments.
 
 Do not distribute this prototype to general users until consent, permissions, security review, authentication/access control, data minimization, error handling and provider policy compliance have been addressed.
 
