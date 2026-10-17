@@ -1,5 +1,5 @@
 // E-TAP Gmail prototype. Change this URL when deploying the backend.
-const ETAP_API_BASE_URL = 'http://127.0.0.1:5000';
+const ETAP_API_BASE_URL = 'https://etap-backend-od1c.onrender.com';
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'analyzeEmail') {
         const emailData = request.data;

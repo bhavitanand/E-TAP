@@ -1,5 +1,5 @@
 // E-TAP Gmail prototype. Change this URL when deploying the frontend.
-const ETAP_APP_BASE_URL = 'http://127.0.0.1:5173';
+const ETAP_APP_BASE_URL = 'https://e-tap-lac.vercel.app';
 
 // Keep track of emails we've already scanned to prevent infinite loops
 const scannedEmails = new Set();
