@@ -1,73 +1,52 @@
-# Stage F — Correlation Engine + persistence
+# Correlation Engine and MongoDB Persistence
 
-Stage F is the historical relationship layer of the email-analysis pipeline.
-It does two jobs together:
-
-1. **Correlate** the current email's Stage D IOCs against previously stored emails.
-2. **Persist** the current email's analysis so future emails can be correlated against it.
+`correlation/engine.py` correlates the current email against previously analyzed emails, assigns/merges a campaign, and stores the analysis so subsequent investigations can compare against it.
 
 ## Flow
 
 ```text
-Stage A  -> normalized EmailObject
-Stage B  -> header forensics
-Stage B2 -> attachment forensics
-Stage D  -> IPs / domains / URLs / hashes
-                 |
-                 v
-              Stage F
-        correlation + persistence
-                 |
-                 v
-               MongoDB
+Parsed email + forensic stages
+        │
+        ├── Stage D IOCs: IPs / domains / URLs / hashes
+        ├── Optional Stage E reputation enrichment
+        ▼
+Stage F: historical correlation + campaign assignment
+        ▼
+MongoDB: analyzed_emails / campaigns / counters
 ```
 
-Stage E (threat intelligence) is a separate stage. Its enrichment may be
-passed into F for persistence, but F does not depend on threat-intel
-reputation to perform its basic correlation.
+## Matching and persistence
 
-## What F does
+- Exact overlap for IPs, URLs and file hashes.
+- Exact domain overlap plus fuzzy domain relationship checks using existing domain helpers.
+- Returns related historical records and shared infrastructure details.
+- Reuses an existing campaign for matching records, creates a campaign when appropriate, and merges campaigns when an artifact bridges groups.
+- Stores correlation-relevant metadata and the stage results passed into the write path; the raw full email body is not intentionally saved by Stage F.
+- When an existing `message_id` is present, the record is updated rather than duplicated, and the record is excluded from matching against itself.
 
-For the current email, F checks historical records for:
+Correlation is a heuristic relationship signal. A shared indicator does not by itself prove two emails share an actor or campaign.
 
-- exact IP matches
-- exact URL matches
-- exact file-hash matches
-- exact domain matches
-- fuzzy domain relationships using the existing Stage B domain helpers
+## Database configuration
 
-It then:
+The engine uses the shared database handle from `db.connection`. Collections are named in `db/schema.py`:
 
-- returns related historical emails
-- identifies shared infrastructure
-- joins an existing campaign when appropriate
-- creates a new campaign when there is no historical match
-- merges campaigns when one email bridges multiple existing campaigns
-- stores the current email/analysis regardless of whether a match was found
+- `analyzed_emails` — investigation records.
+- `campaigns` — campaign membership and shared infrastructure.
+- `counters` — sequence values used for readable campaign IDs.
 
-The stored analysis keeps the correlation-relevant email metadata (`message_id`,
-subject, sender, recipient, date, source format), plus Stage B/B2/D results and
-optional Stage E enrichment. Raw email bodies are not stored by Stage F.
+For a local MongoDB server:
 
-A repeated `message_id` is updated in place and is not treated as its own
-historical match.
-
-## Database
-
-The implementation uses the shared database handle from `db.connection`.
-Set `USE_FAKE_DB=1` for an in-memory local test store. For the team's shared
-MongoDB setup, configure:
-
-```text
-MONGODB_URI=mongodb://localhost:27017/phishing-investigator
+```dotenv
+MONGODB_URI=mongodb://localhost:27017/etap
+MONGO_DB_NAME=etap
+USE_FAKE_DB=0
 ```
 
-No F-specific database is required.
+For Atlas, use the Atlas URI, keep the database name `etap`, and permit network access from the connecting host. `USE_FAKE_DB=1` selects an in-memory store for testing only; it is not persistent.
 
-## Read-only query surface
+## Internal query helpers
 
-`correlation.queries` is separate from the write path and is intended for
-future API/dashboard endpoints:
+`correlation/queries.py` exposes Python helper functions for recent analyses, time-window queries, IOC matches, campaigns, and campaign details. These helpers are not all exposed as HTTP API routes.
 
 ```python
 queries.recent_analyses(limit=10)
@@ -77,19 +56,22 @@ queries.list_campaigns()
 queries.campaign_detail("campaign_003")
 ```
 
-## Testing
+## Tests and CLI
 
-Run the regression/demo test with:
+Run from the `backend/` directory. PowerShell example:
 
-```bash
-USE_FAKE_DB=1 PYTHONPATH=. python3 tests/test_correlation_demo.py
+```powershell
+$env:USE_FAKE_DB = "1"
+$env:THREAT_INTEL_LIVE = "0"
+python tests/test_correlation_demo.py
 ```
 
-Run the real A -> B/B2 -> D -> F integration runner with:
+To run an end-to-end pipeline against a local artifact:
 
-```bash
-USE_FAKE_DB=1 THREAT_INTEL_LIVE=0 PYTHONPATH=. python3 run_pipeline.py path/to/email.eml
+```powershell
+$env:USE_FAKE_DB = "1"
+$env:THREAT_INTEL_LIVE = "0"
+python run_pipeline.py path\to\email.eml
 ```
 
-The integration runner now executes the complete A -> B/B2 -> D -> E -> F
--> G -> H flow using the actual Stage A parser in this codebase.
+Replace the path with an actual `.eml` file available on your machine. Raw email files are not included in this repository's test corpus.

@@ -1,36 +1,53 @@
-# E-TAP — Current Work Plan
+# E-TAP — Project Status and Work Plan
 
 ## Product goal
 
-E-TAP (Email-TAP) bridges the gap between technical email-forensics evidence and understandable, actionable guidance for everyday users, while retaining a deeper investigation view for security practitioners.
+E-TAP (Email-TAP) bridges the gap between technical email-forensics evidence and understandable, actionable guidance for everyday users, while preserving detailed investigative information for security practitioners.
 
-## Current phase: stabilize the existing web application
+## Current status
 
-- [ ] Verify local backend startup and `/health`.
-- [ ] Verify frontend install/build and backend connectivity.
-- [ ] Run parser and forensic tests against the small committed fixtures.
-- [ ] Configure a fresh MongoDB database and validate persistence.
-- [ ] Add fresh API keys only after local-only / no-key mode works.
-- [ ] Validate each external API integration, rate limits, and what data is transmitted.
-- [ ] Deploy backend and frontend separately; configure exact CORS origins and environment variables.
-- [ ] Re-test the Gmail browser extension against a dedicated test mailbox.
+The team has manually verified the local pipeline and deployed the current web application:
 
-## Known issues / risks to validate
+- [x] React/Vite dashboard loads locally and on Vercel.
+- [x] FastAPI backend is deployed on Render and responds at `/health`.
+- [x] Backend connects to the MongoDB Atlas `etap` database.
+- [x] Live frontend's API base URL and backend CORS allowlist are configured for the current Vercel domain.
+- [x] The built-in benign and phishing `.eml` test buttons were tested against the local pipeline; repeat tests against the hosted deployment when making backend/config changes.
+- [x] Gemini and threat-intelligence keys are configured through backend environment settings, not frontend code.
+- [ ] Re-test the complete hosted analysis → Atlas persistence → history/report retrieval → RAG Assistant flow after each material deployment change.
+- [ ] Confirm the exact Gemini model configured for the deployment remains available to the team's API key.
 
-1. **Gmail extension is experimental.** It scrapes the rendered Gmail DOM, then reconstructs a simplified message. It does not reliably preserve the raw message or complete authentication headers, and Gmail's selectors can change.
-2. **External data sharing.** Live reputation services and generative AI providers may receive indicators or message-derived data. Make this explicit; do not claim full local-only processing while using cloud APIs.
-3. **Extension API URL.** `extension/background.js` points to the API base URL; `extension/content.js` points to the dashboard. Update both for a hosted deployment and ensure `extension/manifest.json` permits the API host.
-4. **CORS.** Set `ALLOWED_ORIGINS` to exact frontend origins on the backend host.
-5. **MongoDB.** `USE_FAKE_DB=1` is ephemeral and only for smoke tests. Use a real local MongoDB server or Atlas for persistence.
-6. **Secrets.** Keep API keys and database credentials in `.env` locally and secret environment variables in hosting providers. Never commit them.
-7. **Detection quality.** Risk scores are triage, not proof. Validate false positives/negatives with benign and malicious test messages.
+Current URLs (update when changed):
+
+- Frontend: <https://e-tap-lac.vercel.app/>
+- Backend health: <https://etap-backend-od1c.onrender.com/health>
+- API docs: <https://etap-backend-od1c.onrender.com/docs>
+
+## Known limitations / risks
+
+1. **Gmail extension is experimental.** It automatically inspects visible Gmail DOM elements, then reconstructs a simplified email message. It does not reliably preserve the original raw message, original authentication headers or attachments. The extension source currently targets localhost by default and must be pointed to the hosted URLs separately if required.
+2. **Browser history is local.** The History page stores its list in browser `localStorage` (up to 50 entries). The backend persists individual analysis records in MongoDB, and exposes `GET /investigations/{email_id}`, but does not currently expose a general server-side history-list API.
+3. **External data sharing.** Live reputation services can receive IOCs; Gemini prompts may include email-derived text and forensic evidence. Do not claim full local-only processing while using cloud APIs.
+4. **RAG embedding quality.** On Render, the embedding code uses a deterministic hash-based fallback to reduce memory requirements. This is not the same as a trained semantic embedding model. Atlas Vector Search remains opt-in and requires a configured matching index.
+5. **Detection quality.** Risk scores and campaign relationships are triage heuristics. Evaluate false positives and false negatives on diverse authorized samples before operational use.
+6. **Secrets.** Keep API keys, database credentials and access tokens in `.env` locally or secret environment variables in hosting providers. Never commit them. Rotate any credential exposed in chat, screenshots, logs or repository history.
+7. **Hosted runtime.** Render free instances may spin down and have limited CPU/RAM; large OCR, attachment analysis or multiple concurrent requests may be slow or exceed resource limits.
+
+## Near-term priorities
+
+- [ ] Add a health/readiness check that reports database connectivity separately from basic HTTP process health.
+- [ ] Improve RAG retrieval quality and test evidence grounding on the hosted Atlas records.
+- [ ] Fix stale dashboard copy that refers to local port 5000 in hosted mode.
+- [ ] Audit Gmail extension permissions, consent, scan controls, authentication and hosted URL configuration before broader use.
+- [ ] Decide whether a server-side paginated history endpoint is needed, instead of relying only on browser-local history.
+- [ ] Run a documented clean-install test from a fresh clone and record the supported Python/Node versions.
 
 ## Later phase: Tauri desktop shell
 
-After the existing website and backend are stable, evaluate Tauri packaging. Keep the Python forensic engine as a managed local sidecar, and design secure lifecycle management and token storage before adding Gmail OAuth. Do not attempt full Gmail feature parity in the first iteration.
+After the web app, backend, privacy handling and extension are stable, evaluate a Tauri desktop shell. Keep the Python forensic engine as a managed local sidecar, and design secure process lifecycle management and token storage before adding Gmail OAuth. Full Gmail feature parity is outside the current MVP.
 
 ## Team
 
-- Bhavit
+- Bhavit Anand
 - Krish Anand
 - Yashmit Kamal

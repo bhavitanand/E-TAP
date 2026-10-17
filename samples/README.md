@@ -1,22 +1,15 @@
-# Test Corpus
+# Sample Corpus and Test Data
 
-This folder holds raw email samples used for testing/training across the pipeline
-(Stage A parser fixtures, Stage C classifier, Stage B2 attachment forensics).
+This folder contains metadata for test email sets and parser fixtures. It does **not** contain the raw `.eml` and `.msg` files referenced in the email dataset manifests; those formats are excluded by the repository's root `.gitignore`.
 
-**Nothing under `samples/raw/` is committed to git** (see root `.gitignore`) —
-only the empty folder structure (via `.gitkeep` files) is tracked, so everyone
-gets the same layout when they clone the repo, but has to download the actual
-files themselves.
+## What is included
 
-```
+- `email_dataset/set_*/set*_manifest.json` — sample IDs, intended relative paths, format labels and categories. A manifest entry does not mean the referenced raw email file is present in a fresh clone.
+- `../docs/parser_fixtures/` — small structured fixture files used by selected parser and forensic tests.
+- The two sample emails used by the dashboard's live-pipeline test buttons are embedded as strings in `frontend/src/pages/UploadPage.jsx`; they are sent to the actual `/analyze` API when those buttons are clicked.
 
-## Why not commit the files
+## Why raw emails are not committed
 
-- **Repo bloat** — 100+ emails with attachments can hit hundreds of MB fast.
-- **Legal/ethical gray area** — some public phishing corpora contain real
-  malicious payloads; redistributing them inside our own repo is bad practice,
-  especially once the repo may go public post-hackathon.
-- **License terms** — some corpora (Enron, CIC) don't clearly permit
-  redistribution.
+Email corpora can contain personal data, sensitive headers, malicious attachments, redistribution restrictions or large payloads. Obtain or create test artifacts only when you have permission to use them. Prefer synthetic, non-sensitive samples for public demos and automated tests.
 
-```
+If you add an approved small fixture to the repository, review its content and licensing first and update `.gitignore` deliberately rather than removing the email-artifact ignore rules globally.

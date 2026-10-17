@@ -1,136 +1,49 @@
-# Stage E — Threat Intelligence Lookup (Owner: the team)
+# Threat Intelligence Lookups (Stage E)
 
-threat intel requirements additions: requests>=2.31.0 and python-whois>=0.9.4
+The `threat_intel/` package optionally enriches IOCs extracted by Stage D. Live lookups are controlled by `THREAT_INTEL_LIVE`; provider failures are represented as per-indicator errors/statuses where possible so one unavailable lookup does not necessarily abort the whole analysis.
 
-## Input
+## Providers used
 
-Stage D's IOC output: `{"ips": [...], "domains": [...], "urls": [...], "hashes": [...]}`
+| Indicator | Provider / method | Environment variable |
+|---|---|---|
+| Public IP reputation | AbuseIPDB | `ABUSEIPDB_API_KEY` |
+| IP geolocation | ip-api.com batch API | No key in the current implementation |
+| Domain age and registrar | WHOIS via `python-whois` | No API key in the current implementation |
+| URL and file-hash reputation | VirusTotal API v3 | `VIRUSTOTAL_API_KEY` |
 
-## Output
+Private, loopback and reserved IP addresses are skipped for external IP reputation/geolocation lookups. This helps avoid sending internal addresses to public services.
 
-```json
-{
-  "lookup_mode": "live",
-  "ip_reputation": {
-    "185.x.x.x": {
-      "malicious": true,
-      "abuse_confidence_score": 100,
-      "reports": 45,
-      "country": "RU",
-      "isp": "...",
-      "domain": "...",
-      "is_tor": false
-    }
-  },
-  "domain_info": {
-    "fake-bank.com": {
-      "age_days": 3,
-      "registrar": "...",
-      "creation_date": "..."
-    }
-  },
-  "url_reputation": {
-    "http://fake-bank.com/login": {
-      "malicious": true,
-      "malicious_engine_count": 12,
-      "total_engines": 70
-    }
-  },
-  "hash_reputation": {
-    "abc123...": {
-      "malicious": true,
-      "malicious_engine_count": 40,
-      "total_engines": 70
-    }
-  },
-  "geo": [{ "ip": "185.x.x.x", "lat": 55.7, "lon": 37.6, "country": "RU" }]
-}
+## Configuration
+
+```dotenv
+THREAT_INTEL_LIVE=0
+ABUSEIPDB_API_KEY=
+VIRUSTOTAL_API_KEY=
 ```
 
-Note: `hash_reputation` isn't in the original Stage E spec's output shape
-(only ip/domain/url/geo) — added as a reasonable extension since Stage D
-provides hashes and something needs to look them up. Flag to whoever
-builds Stage F/G in case they expect a different key name.
+Keep `THREAT_INTEL_LIVE=0` when testing offline parsing. Set it to `1` to enable implemented live lookups after adding valid provider keys and reviewing privacy implications. Third-party lookups transmit IOCs (such as public IPs, URLs and file hashes) to the provider; domain WHOIS and geolocation requests also require outbound network access.
 
-## Sources
+Store keys in the repository-root `.env` for local development or in the backend service's secret environment settings for hosting. Never place them in the frontend bundle or commit them.
 
-| IOC                   | Source                                         | API key needed?            |
-| --------------------- | ---------------------------------------------- | -------------------------- |
-| IP reputation         | AbuseIPDB                                      | Yes — `ABUSEIPDB_API_KEY`  |
-| IP geolocation        | ip-api.com                                     | **No**                     |
-| Domain age/registrar  | WHOIS (via `python-whois` library, not an API) | No                         |
-| URL / hash reputation | VirusTotal                                     | Yes — `VIRUSTOTAL_API_KEY` |
+## Result behavior
 
-## Setup
+The stage produces structured results including lookup mode, IP reputation, domain information, URL/file-hash reputation and geolocation data where applicable. Exact fields vary by provider response and error state.
 
-```
-pip install requests python-whois
-```
+- Missing key: returns an error/status for the affected lookup rather than treating the indicator as clean.
+- Unknown indicator (for example, a VirusTotal 404 for an unscanned URL/hash): remains unknown; it is not equivalent to a confirmed benign result.
+- Rate limits and network/WHOIS failures are reported and the relevant lookup is degraded gracefully where supported.
+- Short-lived in-memory caches reduce duplicate requests during a running backend process; cache contents do not survive a process restart.
 
-Add to `.env`:
+Provider quotas and terms change; consult each provider's current plan before running repeated live tests. VirusTotal requests are throttled in-process by this implementation, but a process-local limiter is not a distributed quota controller across multiple backend instances.
 
-```
-THREAT_INTEL_LIVE=1
-ABUSEIPDB_API_KEY=your_key_here
-VIRUSTOTAL_API_KEY=your_key_here
-```
+## Modules and tests
 
-`THREAT_INTEL_LIVE=0` keeps the full pipeline in offline placeholder mode
-so local demos do not depend on API keys, WHOIS, or outbound network.
-ip-api.com and WHOIS need no keys, but they still require network access,
-so the pipeline disables them unless live mode is explicitly enabled.
+- `cache.py` — in-memory TTL cache.
+- `ip_lookup.py` — AbuseIPDB reputation and IP geolocation.
+- `domain_lookup.py` — WHOIS domain age/registrar lookup.
+- `vt_lookup.py` — VirusTotal URL/hash reputation.
+- `threat_intel.py` — `enrich_iocs()` orchestration entry point.
+- `../tests/test_threat_intel.py` — mocked responses; no real provider calls required.
+- `../tests/test_threat_intel_live.py` — real-network integration test; requires valid API keys and may consume provider quota.
 
-## Rate limits to know about
-
-- **VirusTotal free tier is the tight one**: 4 requests/min, 500/day.
-  This module caches every VT lookup for 1 hour in-memory to avoid
-  burning quota on repeat IOCs across test runs — but the cache resets
-  when the process restarts, so don't loop the live test script.
-- AbuseIPDB free: 1,000 checks/day — comfortable.
-- ip-api.com: 45 requests/min via its batch endpoint, no daily cap
-  mentioned, no key needed — this module batches all IPs from one
-  email into a single call rather than one call per IP.
-
-## Usage
-
-```python
-from threat_intel.threat_intel import enrich_iocs
-
-enrichment = enrich_iocs(stage_d_output)  # live/default Stage E behavior
-offline = enrich_iocs(stage_d_output, live_lookup=False)
-```
-
-## Failure handling
-
-Every lookup function degrades gracefully instead of raising:
-
-- Missing API key → `{"error": "...API_KEY not set"}`
-- Rate limited (VT 429) → `{"error": "...rate limit hit..."}`
-- IOC not found/unknown (VT 404) → `{"malicious": None, "status": "not previously scanned..."}`
-  — deliberately distinct from `malicious: False`, since "unknown" and
-  "confirmed clean" are different things.
-- Network/WHOIS failure → `{"error": "..."}`
-
-This means a single bad or rate-limited IOC never crashes the whole
-Stage E call — the rest of the IOCs in the batch still get processed.
-
-## Files
-
-- `cache.py` — simple TTL cache shared by all lookup modules
-- `ip_lookup.py` — AbuseIPDB reputation + ip-api.com geolocation
-- `domain_lookup.py` — WHOIS domain age/registrar
-- `vt_lookup.py` — VirusTotal URL/hash reputation
-- `threat_intel.py` — `enrich_iocs()`, the Stage E entry point
-- `../tests/test_threat_intel.py` — mocked tests (no real network calls,
-  matches documented API response shapes exactly)
-- `../tests/test_threat_intel_live.py` — **run this yourself** with real
-  API keys before the demo; sandbox environments used to build this
-  module couldn't reach these APIs to test live
-
-## Known limitation
-
-This was built and tested entirely against mocked HTTP responses shaped
-to match each API's official documentation — not verified against a
-real live call yet. Run `test_threat_intel_live.py` once you have real
-keys in `.env` to confirm actual behavior before relying on this for
-the demo.
+Run the mocked test from `backend/` with your project's test runner. Do not run live tests repeatedly against large datasets; use a small, non-sensitive test artifact and monitor quota.

@@ -2,110 +2,155 @@
 
 **The one-tap email forensics and protection platform** — bridging the gap between cybersecurity professionals and everyday email users.
 
-E-TAP is a defensive email-artifact analysis application. The current version is a React/Vite dashboard backed by a Python/FastAPI analysis engine. It analyzes uploaded `.eml` and `.msg` files; it is **not yet a Gmail replacement or a full mail client**. The browser extension is an experimental Gmail overlay and should be treated as a prototype.
+E-TAP is a defensive email-artifact analysis application. The current product consists of a React/Vite dashboard and a Python/FastAPI forensic backend. It analyzes uploaded `.eml` and `.msg` artifacts. **It is not a Gmail replacement or a full email client.** The browser extension is an experimental Gmail overlay.
 
-## Current capabilities
+## Current deployment
 
-- Email parsing and MIME normalization for supported `.eml` / `.msg` artifacts.
-- Header and authentication-related checks, received-chain inspection, and sender/domain analysis.
-- Attachment and image analysis, including file-signature checks, QR extraction, and OCR where dependencies are available.
-- Indicator-of-compromise extraction and optional threat-intelligence lookups.
-- Optional Gemini-powered analysis and MITRE ATT&CK-oriented explanations.
-- Campaign correlation and persistence through MongoDB.
-- React dashboard, investigation history, and report views.
+These are the team's current demo deployments. Update this section if the service URLs change.
 
-Feature availability depends on configuration and the specific artifact. Do not treat any automated verdict as definitive; verify evidence before taking action.
+- **Frontend:** <https://e-tap-lac.vercel.app/>
+- **Backend health endpoint:** <https://etap-backend-od1c.onrender.com/health>
+- **Interactive API documentation:** <https://etap-backend-od1c.onrender.com/docs>
+
+The backend API does not define a homepage route, so opening the backend's bare URL may return `{"detail":"Not Found"}`. Use `/health` or `/docs` to check the service.
+
+## Capabilities
+
+- Parse supported `.eml` and `.msg` artifacts and normalize message content.
+- Inspect email headers and authentication-related results (SPF, DKIM, DMARC where evidence is available), received chains, and sender/domain indicators.
+- Inspect attachments using SHA-256 hashing, file-signature/type checks, macro-oriented static analysis, and image OCR/QR analysis where applicable dependencies are available.
+- Extract indicators of compromise (IOCs), including IPs, domains, URLs and hashes.
+- Optionally enrich indicators through AbuseIPDB, VirusTotal, IP geolocation and WHOIS lookups.
+- Run XGBoost metadata triage and optional Gemini-assisted assessment, including evidence-oriented explanations and MITRE ATT&CK mappings.
+- Correlate analyses with previously stored indicators and campaign records in MongoDB.
+- Display analysis reports, maps/graphs where relevant, and export reports from the frontend.
+- Provide a SOC Assistant that can answer about the active report or search stored investigations.
+
+Capabilities depend on the artifact, environment configuration, provider availability and API quotas. Results are triage assistance—not proof that an email is malicious or safe. Review the evidence before taking action.
 
 ## Architecture
 
 ```text
-React/Vite dashboard
-       │ HTTP
-       ▼
-FastAPI API (backend/app.py)
-       ├── email parsing + forensic pipeline
-       ├── optional external threat-intelligence / AI APIs
-       └── MongoDB (local or Atlas)
+Browser (React/Vite dashboard)
+        │ HTTP requests
+        ▼
+FastAPI backend (backend/app.py)
+        ├── email parsing and forensic pipeline
+        ├── optional external threat-intelligence and Gemini APIs
+        ├── correlation and RAG/SOC Assistant
+        └── MongoDB local server or MongoDB Atlas
 ```
+
+## Repository layout
+
+- `frontend/` — React/Vite dashboard and report views.
+- `backend/` — FastAPI API, pipeline, forensic modules, database, threat-intelligence integrations and RAG assistant.
+- `extension/` — experimental Manifest V3 Gmail overlay. Its source currently defaults to localhost URLs; see the extension section below before using it with the hosted deployment.
+- `samples/` — dataset manifests and sample-corpus notes. The raw `.eml`/`.msg` files referenced in the manifests are not committed.
+- `DEPLOYMENT.md` — current Render/Vercel/Atlas deployment guide.
+- `SETUP.md` — local development setup.
+- `work.md` — current project status and follow-up work.
 
 ## Run locally (Windows PowerShell)
 
-Requirements: Python 3.11 recommended, Node.js 20+ recommended, and optionally MongoDB Community Server or a MongoDB Atlas database.
+Recommended prerequisites: Python 3.11, Node.js 20+, npm, and either a local MongoDB Community Server or a MongoDB Atlas database. MongoDB Compass is a GUI client; it does not run the MongoDB server itself.
 
-1. Create the environment file:
+From the repository root, create `.env` **only if it does not already exist**:
 
-   ```powershell
-   Copy-Item .env.example .env
-   ```
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
 
-2. Edit `.env`. For a no-credentials smoke test, use `USE_FAKE_DB=1`, leave API keys empty, and set `THREAT_INTEL_LIVE=0`. The fake database is in-memory and is cleared when the backend exits.
+Edit `.env`. For a no-key local smoke test, set `USE_FAKE_DB=1`, `THREAT_INTEL_LIVE=0`, and leave provider keys empty. The fake database is in-memory and loses its data when the backend process exits. For persistent data, set `USE_FAKE_DB=0` and configure a real MongoDB URI.
 
-3. Install Python dependencies and start the API:
+Install dependencies and start the backend in the first terminal:
 
-   ```powershell
-   py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   python -m pip install -r backend/requirements.txt
-   cd backend
-   uvicorn app:app --host 127.0.0.1 --port 5000
-   ```
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r backend\requirements.txt
+cd backend
+python -m uvicorn app:app --host 127.0.0.1 --port 5000
+```
 
-   In another terminal, from the repository root:
+In a second terminal, from the repository root:
 
-   ```powershell
-   cd frontend
-   npm ci
-   npm run dev
-   ```
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
 
-4. Open `http://127.0.0.1:5173`. Check `http://127.0.0.1:5000/health` for API health.
+Open <http://127.0.0.1:5173/>. In development, Vite proxies API routes to `http://127.0.0.1:5000`, so `VITE_API_BASE_URL` can remain unset locally. Check <http://127.0.0.1:5000/health> for the API health response.
 
-If your shell does not allow virtual-environment activation, use `.venv\Scripts\python.exe -m pip ...` and `.venv\Scripts\python.exe -m uvicorn ...` instead.
+If PowerShell blocks virtual-environment activation, run the venv's executables directly, for example `.venv\Scripts\python.exe -m pip install -r backend\requirements.txt`.
 
-## MongoDB: local Compass or Atlas
+## MongoDB: local server, Compass and Atlas
 
-MongoDB Compass is a GUI client, not the database server. For local persistence, install/start MongoDB Community Server and connect Compass to `mongodb://localhost:27017`. Set `MONGODB_URI=mongodb://localhost:27017/etap` in `.env`.
+- **Local database:** install and start MongoDB Community Server. Connect Compass to `mongodb://localhost:27017`, and set `MONGODB_URI=mongodb://localhost:27017/etap` plus `MONGO_DB_NAME=etap` in `.env`.
+- **Cloud database:** create a MongoDB Atlas cluster and a least-privilege database user. Put the Atlas URI in the backend environment. Add the backend host's outbound addresses to Atlas Network Access as appropriate. Compass can connect to the same Atlas URI to inspect collections.
+- Use `USE_FAKE_DB=0` and `AUTO_FALLBACK_DB=0` when you want to confirm the real database is being used; do not allow a silent in-memory fallback to hide a broken connection.
+- Never commit `.env`, database URIs, passwords, API keys, or sensitive message artifacts. URL-encode reserved characters in passwords embedded in a MongoDB URI.
 
-For shared deployments, create a MongoDB Atlas cluster and a database user with only the required database permissions. Set `MONGODB_URI` to the Atlas connection string in the backend host's environment settings. Add the backend host's outbound network access as required by your Atlas configuration; avoid leaving `0.0.0.0/0` enabled permanently. Never commit `.env` or credentials.
+The application stores analysis and campaign data in the `etap` database (including `analyzed_emails`, `campaigns`, and `counters`). The History tab in the browser currently stores its display list in that browser's local storage; it is not a shared server-side list endpoint. Individual stored reports can be fetched by ID through `GET /investigations/{email_id}`.
 
-## Fresh API keys
+## Provider API keys and privacy
 
-Create your own keys in the relevant provider consoles; do not reuse old team members' keys. Set them only in local `.env` or your hosting provider's secret/environment-variable panel:
+Create fresh keys under your own provider accounts and store them only in the backend's local `.env` or the hosting provider's backend environment settings. Never put secrets in Vercel frontend environment variables or source code.
 
-- `GEMINI_API_KEY` — optional AI analysis.
-- `VIRUSTOTAL_API_KEY` — optional domain/URL/file intelligence, subject to provider limits and terms.
-- `ABUSEIPDB_API_KEY` — optional IP reputation lookup.
-- `THREAT_INTEL_LIVE=1` — enables live lookups where supported by the implementation. Keep it `0` until keys and privacy behavior have been checked.
+- `GEMINI_API_KEY` — enables Gemini-assisted assessment and chatbot generation where the code path calls the model.
+- `GEMINI_MODEL` — model identifier accepted by the configured Gemini API key; the code default is `gemini-3.5-flash-lite`.
+- `VIRUSTOTAL_API_KEY` — optional URL/file-hash reputation lookups.
+- `ABUSEIPDB_API_KEY` — optional public-IP reputation lookups.
+- `THREAT_INTEL_LIVE=1` — enables live lookups where implemented; `0` disables live threat-intelligence requests.
 
-Live lookups may transmit indicators or related data to third-party providers. A local dashboard does **not** mean all analysis stays local.
+Live lookups may send IOCs or derived indicators to third-party services. Gemini prompts may include email-related content and forensic evidence. Review provider terms and the data sent before analyzing sensitive messages. A locally running dashboard does not mean all processing remains local.
+
+## Main API endpoints
+
+- `GET /health` — returns `{"status":"ok"}`; this endpoint does not verify MongoDB health by itself.
+- `POST /analyze` — multipart upload with a `file` field containing an `.eml` or `.msg`; the backend enforces a 25 MB limit and rate-limits this endpoint.
+- `POST /chat` — SOC Assistant request containing `question`, with optional `email_id` and `email_context` for active-report context.
+- `GET /investigations/{email_id}` — fetch one stored investigation by its database ID/email ID.
+- `/docs` — FastAPI-generated interactive API docs when enabled by the deployment.
 
 ## Gmail extension (experimental)
 
-The extension currently scrapes visible Gmail DOM content and submits reconstructed plain-text email data to the configured E-TAP API. Gmail's DOM changes frequently, and this is not equivalent to parsing the original raw message or its full authentication headers. Test only with a dedicated test mailbox and non-sensitive sample messages.
+The extension is an early prototype, **not an official Gmail integration**. It watches visible Gmail DOM content, reconstructs a simplified plain-text `.eml` from the sender, subject and visible body, and submits that reconstructed artifact to the configured API. It does not access the original raw Gmail message, reliably retain full original headers, or process original attachments as the user received them. It scans visible messages automatically, so use only a dedicated test mailbox with non-sensitive messages.
 
-1. Start the local backend.
-2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select the `extension` folder.
-3. Open Gmail and inspect the extension console / backend logs.
-4. The extension API endpoint is configured in `extension/background.js`; the dashboard link is configured in `extension/content.js`. Change these when using hosted services, and ensure the target hosts are allowed in `extension/manifest.json`.
+To load it locally in Chrome or Brave:
 
-Do not deploy this prototype to real users until permissions, consent, data minimization, error handling, XSS safety, authentication, and provider policies have been reviewed. The extension sends email content to the configured backend for analysis.
+1. Keep the local backend running.
+2. Open `chrome://extensions` (or `brave://extensions`) and enable Developer mode.
+3. Choose **Load unpacked** and select the repository's `extension/` folder.
+4. Open the dedicated test mailbox and monitor the extension console and backend logs.
+
+The extension currently defaults to `http://127.0.0.1:5000` for the API and `http://127.0.0.1:5173` for the dashboard. To point it at the hosted service, update `ETAP_API_BASE_URL` in `extension/background.js` to `https://etap-backend-od1c.onrender.com` and `ETAP_APP_BASE_URL` in `extension/content.js` to `https://e-tap-lac.vercel.app`, verify the host permissions in `extension/manifest.json`, and reload the unpacked extension. The code change is separate from deploying the website.
+
+Do not distribute this prototype to general users until consent, permissions, security review, authentication/access control, data minimization, error handling and provider policy compliance have been addressed.
+
+## RAG/SOC Assistant notes
+
+The assistant can use the active report as context, or retrieve up to five relevant historical investigation summaries from MongoDB and ask Gemini to formulate an answer. The default historical search is an in-memory cosine-similarity pass over stored records. On Render, `backend/rag/embeddings.py` deliberately uses a deterministic hash-based fallback embedder to avoid loading a large PyTorch model in the constrained instance; it is not equivalent to a trained semantic embedding model. `sentence-transformers` is optional and is not listed in `backend/requirements.txt`.
+
+`USE_ATLAS_VECTOR_SEARCH=1` is an optional path only if the Atlas Vector Search index is configured as expected by `backend/rag/chat.py` (default index name `vector_index`, field `rag_embedding`, 384-dimensional vectors). It is not required for the default cosine-similarity search. Do not enable this setting without first creating and validating the matching Atlas index and stored embeddings.
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for a deployment checklist and [SETUP.md](SETUP.md) for expanded local setup. For a hackathon demo, deploy the backend separately from the static frontend and configure the frontend API base URL and CORS allowlist explicitly.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the deployed Render/Vercel/Atlas configuration and production safety notes. See [SETUP.md](SETUP.md) for expanded local instructions.
 
-## Current limitations / next steps
+## Current limitations
 
-- This is not a full Gmail replacement; Gmail OAuth/mailbox synchronization is not implemented.
-- The extension uses Gmail DOM selectors that may break as Gmail changes.
-- Live third-party APIs can send indicators/content-derived data outside the machine.
-- The in-memory fake DB is for development only and is not persistent.
-- Tauri packaging is a later milestone after the web app, backend configuration, and extension are stable.
-- Automated detection can produce false positives and false negatives.
+- There is no Gmail OAuth/mailbox synchronization, sending, inbox management, or full Gmail parity.
+- The extension reconstructs message content from the rendered Gmail DOM; it is not raw-message forensics.
+- The browser History list is local to that browser's local storage, although analysis records are stored in MongoDB.
+- The deployed RAG path uses fallback hash embeddings unless configured otherwise; retrieved content and answer quality must be validated.
+- Live external services can fail, rate-limit requests, or receive IOCs/content-derived data.
+- Automated verdicts can produce false positives and false negatives. Treat risk scores as triage, not certainty.
+- Tauri desktop packaging and a managed local Python sidecar are future work, not part of the current hosted web deployment.
 
 ## Team
 
-- the team
 - Bhavit Anand
 - Krish Anand
 - Yashmit Kamal

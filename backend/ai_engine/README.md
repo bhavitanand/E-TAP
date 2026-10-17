@@ -1,28 +1,17 @@
-# AI Engine — Stage G + Legacy Content Classifier
+# AI Engine — Metadata Triage and Stage G
 
-The original Stage C content classifier is retained as reusable Level 1
-logic inside Stage G. It analyzes only `subject`, `body_text`, and
-`body_html` against the fixed 30-category phishing/threat taxonomy in
-`prompts.py`.
+This module provides a fast XGBoost metadata triage layer plus Gemini-assisted content/final assessment. Stage G combines the available normalized email content with the earlier pipeline evidence.
 
-Stage G then performs Level 2 final interpretation over the complete
-pipeline evidence:
+## Flow
 
-```text
-email content
-headers
-attachments
-IOCs
-threat intelligence
-correlation
-content classification
-```
+1. The legacy content classifier in `main.py` can classify message content against the configured taxonomy.
+2. `triage_model.py` predicts from six metadata features: attachment presence, URL count, sender-domain age when available, SPF result, subject length, and selected urgency indicators.
+3. `stage_g.py` uses the complete evidence context—email content, headers, attachments, IOCs, threat intelligence and correlation—to produce the final interpretation when Gemini is invoked.
+4. The pipeline skips Gemini only when the triage model is available, predicts benign at or above `TRIAGE_SAFE_THRESHOLD` (default `0.90`), and no heuristic override forces Stage G. Selected risky keywords and extracted URLs force Stage G.
 
-The final assessment returns a risk score, verdict, explanation,
-supporting evidence, recommended actions, and evidence-bound MITRE ATT&CK
-mappings.
+The bundled XGBoost pickle should be treated as an initial triage aid, not a production-calibrated detection model. Validate false positives and false negatives against representative mail before relying on it for operational decisions. If the model is missing or cannot load, the pipeline fails open to the normal analysis path.
 
-## Entry Points
+## Entry points
 
 Full Stage G:
 
@@ -40,25 +29,22 @@ from ai_engine.main import analyze_email
 analysis = analyze_email(parsed_email_dict)
 ```
 
-The full pipeline should call `analyze_with_stage_g()`, not the old
-content-only classifier directly.
+The main pipeline uses `analyze_with_stage_g()` for the final assessment where Stage G is required.
 
-## Gemini Configuration
+## Gemini configuration
 
-Add this to your local `.env` to enable Gemini:
+Store configuration in the repository-root `.env` or the backend host's environment variables:
 
-```text
+```dotenv
 GEMINI_API_KEY=your-own-key-here
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-Never commit `.env` or hard-code a key.
+The model setting must be a model identifier available to the configured API key; adjust it if the provider changes availability. Never commit `.env` or hard-code real credentials. If no Gemini key is configured, Stage G returns an explicit offline fallback result so the analysis pipeline can still return a report.
 
-Importing `ai_engine` does not require a key. If `GEMINI_API_KEY` is empty,
-Stage G returns an explicit `offline_fallback` result so the end-to-end
-pipeline can still be run locally.
+## Output shape
 
-## Output Shape
+Stage G results are combined into the final `/analyze` response. Common fields include:
 
 ```json
 {
@@ -67,9 +53,9 @@ pipeline can still be run locally.
     "content_risk_score": 90,
     "confidence": 0.87,
     "attack_type": "Credential Phishing",
-    "categories": [{"name": "Credential Phishing", "weight": 90}],
-    "reasons": ["..."],
-    "suspicious_indicators": ["..."]
+    "categories": [],
+    "reasons": [],
+    "suspicious_indicators": []
   },
   "final_assessment": {
     "verdict": "HIGH-RISK PHISHING",
@@ -84,9 +70,13 @@ pipeline can still be run locally.
 }
 ```
 
+This is illustrative, not a guaranteed literal response; values and optional keys vary with the artifact and fallback path.
+
 ## Files
 
-- `prompts.py` — content-only taxonomy and prompt reused from Stage C
-- `schemas.py` — Pydantic schemas for content and final assessments
-- `main.py` — legacy content-only Gemini classifier
-- `stage_g.py` — final interpretation, offline fallback scoring, and MITRE mapping
+- `prompts.py` — category taxonomy and classification prompts.
+- `schemas.py` — Pydantic schemas for analysis output.
+- `main.py` — Gemini client/model selection and legacy content classifier.
+- `stage_g.py` — evidence synthesis, fallback scoring and MITRE-oriented mapping.
+- `triage_model.py` — bundled XGBoost model loading and feature-based triage.
+- `train_triage_model.py` — model-training utility; review its expected input data before running it.
