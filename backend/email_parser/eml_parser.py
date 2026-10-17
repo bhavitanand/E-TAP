@@ -72,6 +72,8 @@ def parse_eml_bytes(raw_bytes: bytes) -> ParsedEmail:
 
             if content_disposition == "attachment" or (
                 content_disposition == "inline" and part.get_filename()
+            ) or (
+                content_disposition is None and part.get_filename()
             ):
                 # this is a file attachment
                 try:
